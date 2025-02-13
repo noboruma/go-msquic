@@ -1,4 +1,4 @@
-#include "./inc/msquic.h"
+#include "msquic.h"
 #include <stdlib.h>
 
 #define UNREFERENCED_PARAMETER(P) (void)(P)
@@ -7,12 +7,16 @@
 #define UNREFERENCED_PARAMETER(P) (void)(P)
 #endif
 
-#define LOGS_ENABLED 1
+#define LOGS_ENABLED 0
+
+#include "utils.c"
 
 // Go bindings
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
 extern void newReadCallback(HQUIC, uint8_t *data, int64_t len);
+extern void closeConnectionCallback(HQUIC);
+extern void closeStreamCallback(HQUIC);
 
 static HQUIC Registration;
 static const QUIC_BUFFER Alpn = { sizeof("quic-backconnect") - 1, (uint8_t*)"quic-backconnect" };
@@ -37,20 +41,19 @@ int64_t
 StreamWrite(
     _In_ HQUIC Stream,
 	_In_ uint8_t *array,
-	_Inout_ int64_t *len
+	_In_ int64_t len
     )
 {
-    char* SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + *len);
+    char* SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
     if (SendBufferRaw == NULL) {
         printf("SendBuffer allocation failed!\n");
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
-		*len = 0;
         return -1;
     }
-	memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, *len);
+	memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, len);
     QUIC_BUFFER* SendBuffer = (QUIC_BUFFER*)SendBufferRaw;
     SendBuffer->Buffer = (uint8_t*)SendBufferRaw + sizeof(QUIC_BUFFER);
-    SendBuffer->Length = *len;
+    SendBuffer->Length = len;
 
     //printf("[strm][%p] Sending data...\n", Stream);
 
@@ -61,8 +64,7 @@ StreamWrite(
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 		return -1;
     }
-	//free(SendBufferRaw);
-	return 0;
+	return len;
 }
 
 static
@@ -79,10 +81,6 @@ StreamCallback(
     UNREFERENCED_PARAMETER(Context);
     switch (Event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
-        //
-        // A previous StreamSend call has completed, and the context is being
-        // returned back to the app.
-        //
         free(Event->SEND_COMPLETE.ClientContext);
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Data sent\n", Stream);
@@ -95,12 +93,12 @@ StreamCallback(
 		for (uint32_t i = 0; i < Event->RECEIVE.BufferCount; i++) {
 			newReadCallback(Stream, Event->RECEIVE.Buffers[i].Buffer, Event->RECEIVE.Buffers[i].Length);
 		}
-		MsQuic->StreamReceiveComplete(Stream, Event->RECEIVE.TotalBufferLength);
         break;
     case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer shut down\n", Stream);
 		}
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
         break;
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
         //
@@ -119,12 +117,27 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Stream done\n", Stream);
 		}
-        MsQuic->StreamClose(Stream);
+		closeStreamCallback(Stream);
+		if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
+			MsQuic->StreamClose(Stream);
+		}
         break;
     default:
         break;
     }
     return QUIC_STATUS_SUCCESS;
+}
+
+static
+void
+ShutdownConnection(HQUIC connection) {
+	MsQuic->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+}
+
+static
+void
+ShutdownStream(HQUIC stream) {
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
 }
 
 static
@@ -136,10 +149,6 @@ OpenStream(
     QUIC_STATUS Status;
     HQUIC Stream = NULL;
 
-    //
-    // Create/allocate a new bidirectional stream. The stream is just allocated
-    // and no QUIC stream identifier is assigned until it's started.
-    //
     if (QUIC_FAILED(Status = MsQuic->StreamOpen(Connection, QUIC_STREAM_OPEN_FLAG_NONE, StreamCallback, NULL, &Stream))) {
         printf("StreamOpen failed, 0x%x!\n", Status);
 		return NULL;
@@ -149,10 +158,6 @@ OpenStream(
 		printf("[strm][%p] Starting...\n", Stream);
 	}
 
-    //
-    // Starts the bidirectional stream. By default, the peer is not notified of
-    // the stream being started until data is sent on the stream.
-    //
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
         printf("StreamStart failed, 0x%x!\n", Status);
         MsQuic->StreamClose(Stream);
@@ -175,30 +180,46 @@ ConnectionCallback(
     UNREFERENCED_PARAMETER(Context);
     switch (Event->Type) {
     case QUIC_CONNECTION_EVENT_CONNECTED:
-        printf("[conn][%p] Connected\n", Connection);
+		if (LOGS_ENABLED) {
+			printf("[conn][%p] Connected\n", Connection);
+		}
         MsQuic->ConnectionSendResumptionTicket(Connection, QUIC_SEND_RESUMPTION_FLAG_NONE, 0, NULL);
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
-        if (Event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status == QUIC_STATUS_CONNECTION_IDLE) {
-            printf("[conn][%p] Successfully shut down on idle.\n", Connection);
-        } else {
-            printf("[conn][%p] Shut down by transport, 0x%x\n", Connection, Event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
-        }
+		if (LOGS_ENABLED) {
+			if (Event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status == QUIC_STATUS_CONNECTION_IDLE) {
+				printf("[conn][%p] Successfully shut down on idle.\n", Connection);
+			} else {
+				printf("[conn][%p] Shut down by transport, 0x%x\n", Connection, Event->SHUTDOWN_INITIATED_BY_TRANSPORT.Status);
+			}
+		}
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_PEER:
-        printf("[conn][%p] Shut down by peer, 0x%llu\n", Connection, (unsigned long long)Event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode);
+		if (LOGS_ENABLED) {
+			printf("[conn][%p] Shut down by peer, 0x%llu\n", Connection, (unsigned long long)Event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode);
+		}
+        MsQuic->ConnectionShutdown(Connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
-        printf("[conn][%p] done\n", Connection);
-        MsQuic->ConnectionClose(Connection);
+		if (LOGS_ENABLED) {
+			printf("[conn][%p] done\n", Connection);
+		}
+		closeConnectionCallback(Connection);
+		if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
+			MsQuic->ConnectionClose(Connection);
+		}
         break;
     case QUIC_CONNECTION_EVENT_PEER_STREAM_STARTED:
-        printf("[strm][%p] Peer started\n", Event->PEER_STREAM_STARTED.Stream);
+		if (LOGS_ENABLED) {
+				printf("[strm][%p] Peer started\n", Event->PEER_STREAM_STARTED.Stream);
+		}
         MsQuic->SetCallbackHandler(Event->PEER_STREAM_STARTED.Stream, (void*)StreamCallback, NULL);
 		newStreamCallback(Connection, Event->PEER_STREAM_STARTED.Stream);
         break;
     case QUIC_CONNECTION_EVENT_RESUMED:
-        printf("[conn][%p] Connection resumed!\n", Connection);
+		if (LOGS_ENABLED) {
+			printf("[conn][%p] Connection resumed!\n", Connection);
+		}
         break;
     default:
         break;
@@ -217,8 +238,6 @@ ListenerCallback(
     _Inout_ QUIC_LISTENER_EVENT* Event
     )
 {
-    UNREFERENCED_PARAMETER(Listener);
-    UNREFERENCED_PARAMETER(Context);
 	HQUIC config = NULL;
 	if (Context != NULL) {
 		config = ((struct ConnectionContext*) Context) -> configuration;
@@ -226,11 +245,6 @@ ListenerCallback(
     QUIC_STATUS Status = QUIC_STATUS_NOT_SUPPORTED;
     switch (Event->Type) {
     case QUIC_LISTENER_EVENT_NEW_CONNECTION:
-        //
-        // A new connection is being attempted by a client. For the handshake to
-        // proceed, the server must provide a configuration for QUIC to use. The
-        // app MUST set the callback handler before returning.
-        //
         MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
         Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, config);
 		newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
@@ -290,21 +304,16 @@ HQUIC
 Listen(
 	_In_ const char* addr,
 	_In_ uint16_t port,
-	_In_ struct QUICConfig cfg
+	_In_ HQUIC configuration
 )
 {
     QUIC_STATUS Status;
     HQUIC listener = NULL;
 
     QUIC_ADDR quicAddr = {0};
-	QuicAddrFromString(addr, port, &quicAddr);
-    QuicAddrSetFamily(&quicAddr, QUIC_ADDRESS_FAMILY_UNSPEC);
-    QuicAddrSetPort(&quicAddr, port);
-
-    HQUIC configuration = LoadListenConfiguration(cfg);
-	if (!configuration) {
-        return listener;
-    }
+	customQuicAddrFromString(addr, port, &quicAddr);
+    customQuicAddrSetFamily(&quicAddr, QUIC_ADDRESS_FAMILY_UNSPEC);
+    customQuicAddrSetPort(&quicAddr, port);
 
 	struct ConnectionContext * ctx = malloc(sizeof(struct ConnectionContext));
 	ctx->configuration = configuration;
@@ -327,15 +336,9 @@ Listen(
 }
 
 static
-void CloseListener(HQUIC listener) {
+void CloseListener(HQUIC listener, HQUIC configuration) {
 	MsQuic->ListenerClose(listener);
-}
-
-static
-void CloseConfiguration(HQUIC configuration) {
-	if (configuration != NULL) {
-		MsQuic->ConfigurationClose(configuration);
-	}
+	MsQuic->ConfigurationClose(configuration);
 }
 
 static
@@ -416,7 +419,8 @@ static const QUIC_REGISTRATION_CONFIG RegConfig = { "quic-backconnect", QUIC_EXE
 // This setup is tight to the process lifetime
 static
 int
-MsQuicSetup() {
+MsQuicSetup()
+{
 	QUIC_STATUS Status = QUIC_STATUS_SUCCESS;
     if (QUIC_FAILED(Status = MsQuicOpen2(&MsQuic))) {
         printf("MsQuicOpen2 failed, 0x%x!\n", Status);
@@ -443,10 +447,13 @@ Error:
 static
 int
 GetRemoteAddr(
-HQUIC conn, struct sockaddr_storage* addr, uint32_t* addrLen){
- if (MsQuic->GetParam(conn, QUIC_PARAM_CONN_REMOTE_ADDRESS, addrLen, addr) != QUIC_STATUS_SUCCESS) {
-        return -1; // Failed to retrieve
-    }
-
-    return 0;
+	_In_ HQUIC conn,
+	_Out_ struct sockaddr_storage* addr,
+	_Out_ uint32_t* addrLen
+)
+{
+	if (MsQuic->GetParam(conn, QUIC_PARAM_CONN_REMOTE_ADDRESS, addrLen, addr) != QUIC_STATUS_SUCCESS) {
+		return -1; // Failed to retrieve
+	}
+	return 0;
 }

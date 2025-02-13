@@ -1,0 +1,9 @@
+prefix=/workspace/proxies/msquic
+libdir=${prefix}/build/bin/Release
+includedir=${prefix}/src/inc
+
+Name: MSQuic-libmsquic
+Version: 1.0.0
+Description: MS quic library
+Libs: -L${libdir} -lmsquic
+Cflags: -I${includedir}

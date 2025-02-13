@@ -1,9 +1,24 @@
 package quic
 
 /*
-#cgo CFLAGS: -I./inc
-#cgo LDFLAGS: -L../../../msquic/small_build/bin/Release/ -lmsquic
-#include "msquic.c"
+
+#cgo pkg-config: msquic
+
+#cgo noescape StreamWrite
+
+#cgo nocallback ShutdownConnection
+#cgo nocallback ShutdownStream
+#cgo nocallback OpenStream
+#cgo nocallback LoadListenConfiguration
+#cgo nocallback Listen
+#cgo nocallback CloseListener
+#cgo nocallback DialConnection
+#cgo nocallback MsQuicSetup
+#cgo nocallback GetRemoteAddr
+#cgo nocallback StreamWrite
+
+#include "c/msquic.c"
+
 */
 import "C"
 import (
@@ -13,9 +28,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"runtime"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -47,9 +64,11 @@ type Config struct {
 }
 
 type ReadBuffer struct {
-	buffer bytes.Buffer
-	m      sync.Mutex
-	notify *sync.Cond
+	buffer        bytes.Buffer
+	m             sync.Mutex
+	signal        chan struct{}
+	readDeadline  time.Time
+	writeDeadline time.Time
 }
 
 var streams sync.Map     //map[C.HQUIC]MsQuicStream
@@ -60,18 +79,32 @@ var connections sync.Map //map[C.HQUIC]MsQuicConn
 func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	listener, has := listeners.Load(l)
 	if !has {
-		panic("listener not registered")
+		println("!!! listener not registered")
+		return
 	}
 	res := newMsQuicConn(c)
 	connections.Store(c, res)
 	listener.(MsQuicListener).acceptQueue <- res
 }
 
+//export closeConnectionCallback
+func closeConnectionCallback(c C.HQUIC) {
+	res, has := connections.LoadAndDelete(c)
+	if !has {
+		println("!!! connection close")
+		return
+	}
+	res.(MsQuicConn).remoteClose()
+}
+
+// #cgo noescape newReadCallback
+//
 //export newReadCallback
 func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	rawStream, has := streams.Load(s)
 	if !has {
-		panic("stream not registered")
+		println("!!! stream not registered")
+		return
 	}
 	stream := rawStream.(MsQuicStream)
 	stream.buffer.m.Lock()
@@ -81,21 +114,36 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	_, err := stream.buffer.buffer.Write(goBuffer)
 	// TODO: errors
 	if err != nil {
-		panic(err.Error())
+		println("!!!", err.Error())
+		return
 	}
-	stream.buffer.notify.Signal()
+	select {
+	case stream.buffer.signal <- struct{}{}:
+	default:
+	}
 }
 
 //export newStreamCallback
 func newStreamCallback(c C.HQUIC, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
-		panic("connection not registered")
+		println("!!! connection not registered")
+		return
 	}
 	conn := rawConn.(MsQuicConn)
 	res := newMsQuicStream(s)
 	streams.Store(s, res)
 	conn.acceptStreamQueue <- res
+}
+
+//export closeStreamCallback
+func closeStreamCallback(s C.HQUIC) {
+	res, has := streams.LoadAndDelete(s)
+	if !has {
+		println("!!! close stream not registered")
+		return
+	}
+	res.(MsQuicStream).remoteClose()
 }
 
 func init() {
@@ -111,22 +159,57 @@ type MsQuicConn struct {
 	acceptStreamQueue chan MsQuicStream
 	ctx               context.Context
 	cancel            context.CancelFunc
+	remoteAddr        net.UDPAddr
+	shutdown          *atomic.Bool
 }
 
 func newMsQuicConn(c C.HQUIC) MsQuicConn {
 	ctx, cancel := context.WithCancel(context.Background())
+
+	var addr C.struct_sockaddr_storage
+	var addrLen C.uint32_t = C.uint32_t(unsafe.Sizeof(addr))
+
+	if C.GetRemoteAddr(c, &addr, &addrLen) != 0 {
+		println("remote addr issue")
+	}
+
+	var (
+		ip   net.IP
+		port int
+	)
+	switch addr.ss_family {
+	case C.AF_INET:
+		ip = net.IPv4(
+			byte(addr.__ss_padding[2]),
+			byte(addr.__ss_padding[3]),
+			byte(addr.__ss_padding[4]),
+			byte(addr.__ss_padding[5]),
+		)
+		port = (int(addr.__ss_padding[0]) << 8) | int(addr.__ss_padding[1])
+	default:
+	}
 	return MsQuicConn{
 		conn:              c,
 		acceptStreamQueue: make(chan MsQuicStream),
 		ctx:               ctx,
 		cancel:            cancel,
+		remoteAddr:        net.UDPAddr{IP: ip, Port: port},
+		shutdown:          new(atomic.Bool),
 	}
 }
 
 func (mqc MsQuicConn) Close() error {
-	mqc.cancel()
-	close(mqc.acceptStreamQueue)
-	C.CloseConfiguration(mqc.config)
+	if !mqc.shutdown.Swap(true) {
+		mqc.cancel()
+		C.ShutdownConnection(mqc.conn)
+	}
+	return nil
+}
+
+func (mqc MsQuicConn) remoteClose() error {
+	if !mqc.shutdown.Swap(true) {
+		mqc.cancel()
+	}
 	return nil
 }
 
@@ -157,37 +240,15 @@ func (mqc MsQuicConn) Context() context.Context {
 }
 
 func (mqc MsQuicConn) RemoteAddr() net.Addr {
-	var addr C.struct_sockaddr_storage
-	var addrLen C.uint32_t = C.uint32_t(unsafe.Sizeof(addr))
-
-	// Call the C function to get the address
-	if C.GetRemoteAddr(mqc.conn, &addr, &addrLen) != 0 {
-		return nil
-	}
-
-	// Convert C sockaddr to Go net.Addr
-	switch addr.ss_family {
-	case C.AF_INET:
-		// IPv4
-		ip := net.IPv4(
-			byte(addr.__ss_padding[2]),
-			byte(addr.__ss_padding[3]),
-			byte(addr.__ss_padding[4]),
-			byte(addr.__ss_padding[5]),
-		)
-		port := (int(addr.__ss_padding[0]) << 8) | int(addr.__ss_padding[1])
-		return &net.UDPAddr{IP: ip, Port: port}
-
-	default:
-		return nil
-	}
+	return &mqc.remoteAddr
 }
 
 type MsQuicStream struct {
-	stream C.HQUIC
-	buffer *ReadBuffer
-	ctx    context.Context
-	cancel context.CancelFunc
+	stream   C.HQUIC
+	buffer   *ReadBuffer
+	ctx      context.Context
+	cancel   context.CancelFunc
+	shutdown *atomic.Bool
 }
 
 func newMsQuicStream(s C.HQUIC) MsQuicStream {
@@ -196,35 +257,64 @@ func newMsQuicStream(s C.HQUIC) MsQuicStream {
 		stream: s,
 		buffer: &ReadBuffer{
 			buffer: bytes.Buffer{},
+			signal: make(chan struct{}, 1),
 		},
-		ctx:    ctx,
-		cancel: cancel,
+		ctx:      ctx,
+		cancel:   cancel,
+		shutdown: new(atomic.Bool),
 	}
-	res.buffer.notify = sync.NewCond(&res.buffer.m)
 	return res
 }
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
-	mqs.buffer.m.Lock()
-	defer mqs.buffer.m.Unlock()
-	for mqs.buffer.buffer.Len() == 0 && mqs.ctx.Err() == nil {
-		mqs.buffer.notify.Wait()
-	}
-	if mqs.ctx.Err() != nil {
+	if mqs.shutdown.Load() {
 		return 0, io.EOF
 	}
+
+	mqs.buffer.m.Lock()
+	for mqs.buffer.buffer.Len() == 0 {
+		ctx := mqs.ctx
+		if !mqs.buffer.readDeadline.IsZero() {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithDeadline(ctx, mqs.buffer.readDeadline)
+			defer cancel()
+		}
+
+		mqs.buffer.m.Unlock()
+
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				return 0, os.ErrDeadlineExceeded
+			}
+			return 0, io.EOF
+		case <-mqs.buffer.signal:
+			mqs.buffer.m.Lock()
+		}
+	}
+
+	defer mqs.buffer.m.Unlock()
+
 	return mqs.buffer.buffer.Read(data)
 }
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
-	cArray := (*C.uint8_t)(unsafe.Pointer(&data[0]))
-	n := C.int64_t(len(data))
-	status := C.StreamWrite(mqs.stream, cArray, &n)
-	if status != 0 {
-		return int(n), fmt.Errorf("read stream error: %d", status)
+	if mqs.shutdown.Load() {
+		return 0, io.EOF
+	}
+	offset := 0
+	size := len(data)
+	for offset != len(data) {
+		cArray := (*C.uint8_t)(unsafe.Pointer(&data[offset]))
+		n := C.StreamWrite(mqs.stream, cArray, C.int64_t(size))
+		offset += int(n)
+		size -= int(n)
+		if n == -1 {
+			return int(n), fmt.Errorf("write stream error")
+		}
 	}
 	runtime.KeepAlive(data)
-	return int(n), nil
+	return int(offset), nil
 }
 
 func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
@@ -234,6 +324,9 @@ func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
 }
 
 func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
+	mqs.buffer.m.Lock()
+	defer mqs.buffer.m.Unlock()
+	mqs.buffer.readDeadline = ttl
 	return nil
 }
 
@@ -246,32 +339,45 @@ func (mqs MsQuicStream) Context() context.Context {
 }
 
 func (mqs MsQuicStream) Close() error {
-	mqs.cancel()
-	mqs.buffer.notify.Broadcast()
+	if !mqs.shutdown.Swap(true) {
+		mqs.cancel()
+		C.ShutdownStream(mqs.stream)
+	}
+	return nil
+}
+
+func (mqs MsQuicStream) remoteClose() error {
+	if !mqs.shutdown.Swap(true) {
+		mqs.cancel()
+	}
 	return nil
 }
 
 type MsQuicListener struct {
-	listener    C.HQUIC
-	acceptQueue chan MsQuicConn
+	listener, config C.HQUIC
+	acceptQueue      chan MsQuicConn
 	// deallocate
 	key, cert *C.char
+	shutdown  *atomic.Bool
 }
 
-func newMsQuicListener(c C.HQUIC, key, cert *C.char) MsQuicListener {
+func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert *C.char) MsQuicListener {
 	return MsQuicListener{
 		listener:    c,
 		acceptQueue: make(chan MsQuicConn),
 		key:         key,
 		cert:        cert,
+		config:      config,
+		shutdown:    new(atomic.Bool),
 	}
 }
 
 func (mql MsQuicListener) Close() error {
-	close(mql.acceptQueue)
-	C.CloseListener(mql.listener)
-	C.free(unsafe.Pointer(mql.key))
-	C.free(unsafe.Pointer(mql.cert))
+	if !mql.shutdown.Swap(true) {
+		C.CloseListener(mql.listener, mql.config)
+		C.free(unsafe.Pointer(mql.key))
+		C.free(unsafe.Pointer(mql.cert))
+	}
 	return nil
 }
 
@@ -295,17 +401,19 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	cKeyFile := C.CString(cfg.KeyFile)
 	cCertFile := C.CString(cfg.CertFile)
 
-	listener := C.Listen(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
+	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
 		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
 		keyFile:                      cKeyFile,
 		certFile:                     cCertFile,
 	})
+
+	listener := C.Listen(cAddr, C.uint16_t(portInt), config)
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, cKeyFile, cCertFile)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile)
 	listeners.Store(listener, res)
 	return res, nil
 }
