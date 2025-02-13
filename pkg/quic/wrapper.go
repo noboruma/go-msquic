@@ -38,6 +38,11 @@ import (
 	"unsafe"
 )
 
+var totalOpenedStreams atomic.Int64
+var totalOpenedConnections atomic.Int64
+var totalClosedStreams atomic.Int64
+var totalClosedConnections atomic.Int64
+
 type Connection interface {
 	OpenStream() (MsQuicStream, error)
 	AcceptStream(ctx context.Context) (MsQuicStream, error)
@@ -62,6 +67,7 @@ type Config struct {
 	KeepAlivePeriod    int64
 	CertFile           string
 	KeyFile            string
+	Alpn               string
 }
 
 type ReadBuffer struct {
@@ -82,6 +88,7 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	if !has {
 		panic("Missing listener")
 	}
+	totalOpenedConnections.Add(1)
 	res := newMsQuicConn(c)
 	connections.Store(c, res)
 	listener.(MsQuicListener).acceptQueue <- res
@@ -93,6 +100,7 @@ func closeConnectionCallback(c C.HQUIC) {
 	if !has {
 		panic("Missing connection")
 	}
+	totalClosedConnections.Add(1)
 	res.(MsQuicConn).remoteClose()
 }
 
@@ -121,12 +129,18 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 
 //export newStreamCallback
 func newStreamCallback(c C.HQUIC, s C.HQUIC) {
+	totalOpenedStreams.Add(1)
 	rawConn, has := connections.Load(c)
 	if !has {
 		panic("connection not registered")
 	}
+	if _, has := streams.Load(s); has {
+		// stream opened locally, no need to accept
+		println("Yes it happens")
+		return
+	}
 	conn := rawConn.(MsQuicConn)
-	res := newMsQuicStream(s)
+	res := newMsQuicStream(s, conn.ctx)
 	streams.Store(s, res)
 	conn.acceptStreamQueue <- res
 }
@@ -137,6 +151,7 @@ func closeStreamCallback(s C.HQUIC) {
 	if !has {
 		panic("stream not registered")
 	}
+	totalClosedStreams.Add(1)
 	res.(MsQuicStream).remoteClose()
 }
 
@@ -145,6 +160,24 @@ func init() {
 	if status != 0 {
 		panic(fmt.Sprintf("failed to load quic: %d", status))
 	}
+	go func() {
+		for {
+			<-time.After(5 * time.Second)
+			sCount := 0
+			streams.Range(func(_, _ any) bool {
+				sCount += 1
+				return true
+			})
+			cCount := 0
+			connections.Range(func(_, _ any) bool {
+				cCount += 1
+				return true
+			})
+			println("streams: ", sCount, "connections:", cCount)
+			println("totalOpenedStreams: ", totalOpenedStreams.Load(), "totalClosedStreams:", totalClosedStreams.Load())
+			println("totalOpenedConns: ", totalOpenedConnections.Load(), "totalClosedConns:", totalClosedConnections.Load())
+		}
+	}()
 }
 
 type MsQuicConn struct {
@@ -184,7 +217,7 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 	}
 	return MsQuicConn{
 		conn:              c,
-		acceptStreamQueue: make(chan MsQuicStream),
+		acceptStreamQueue: make(chan MsQuicStream, 1024),
 		ctx:               ctx,
 		cancel:            cancel,
 		remoteAddr:        net.UDPAddr{IP: ip, Port: port},
@@ -208,11 +241,15 @@ func (mqc MsQuicConn) remoteClose() error {
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
+	if mqc.shutdown.Load() {
+		return MsQuicStream{}, fmt.Errorf("closed connection")
+	}
 	stream := C.OpenStream(mqc.conn)
 	if stream == nil {
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
-	res := newMsQuicStream(stream)
+	totalOpenedStreams.Add(1)
+	res := newMsQuicStream(stream, mqc.ctx)
 	streams.Store(stream, res)
 	return res, nil
 }
@@ -220,13 +257,14 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 func (mqc MsQuicConn) AcceptStream(ctx context.Context) (MsQuicStream, error) {
 	select {
 	case <-ctx.Done():
+	case <-mqc.ctx.Done():
 	case s, open := <-mqc.acceptStreamQueue:
 		if !open {
 			return MsQuicStream{}, fmt.Errorf("closed connection")
 		}
 		return s, nil
 	}
-	return MsQuicStream{}, fmt.Errorf("closed context")
+	return MsQuicStream{}, fmt.Errorf("closed connection")
 }
 
 func (mqc MsQuicConn) Context() context.Context {
@@ -245,8 +283,8 @@ type MsQuicStream struct {
 	shutdown *atomic.Bool
 }
 
-func newMsQuicStream(s C.HQUIC) MsQuicStream {
-	ctx, cancel := context.WithCancel(context.Background())
+func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
+	ctx, cancel := context.WithCancel(connCtx)
 	res := MsQuicStream{
 		stream: s,
 		buffer: &ReadBuffer{
@@ -257,6 +295,7 @@ func newMsQuicStream(s C.HQUIC) MsQuicStream {
 		cancel:   cancel,
 		shutdown: new(atomic.Bool),
 	}
+
 	return res
 }
 
@@ -351,16 +390,17 @@ type MsQuicListener struct {
 	listener, config C.HQUIC
 	acceptQueue      chan MsQuicConn
 	// deallocate
-	key, cert *C.char
-	shutdown  *atomic.Bool
+	key, cert, alpn *C.char
+	shutdown        *atomic.Bool
 }
 
-func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert *C.char) MsQuicListener {
+func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char) MsQuicListener {
 	return MsQuicListener{
 		listener:    c,
-		acceptQueue: make(chan MsQuicConn),
+		acceptQueue: make(chan MsQuicConn, 1024),
 		key:         key,
 		cert:        cert,
+		alpn:        alpn,
 		config:      config,
 		shutdown:    new(atomic.Bool),
 	}
@@ -371,6 +411,7 @@ func (mql MsQuicListener) Close() error {
 		C.CloseListener(mql.listener, mql.config)
 		C.free(unsafe.Pointer(mql.key))
 		C.free(unsafe.Pointer(mql.cert))
+		C.free(unsafe.Pointer(mql.alpn))
 	}
 	return nil
 }
@@ -394,6 +435,12 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	defer C.free(unsafe.Pointer(cAddr))
 	cKeyFile := C.CString(cfg.KeyFile)
 	cCertFile := C.CString(cfg.CertFile)
+	cAlpn := C.CString(cfg.Alpn)
+
+	buffer := C.struct_QUIC_BUFFER{
+		Length: C.uint32_t(len(cfg.Alpn)),
+		Buffer: (*C.uint8_t)(unsafe.Pointer(cAlpn)),
+	}
 
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
@@ -401,13 +448,14 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
 		keyFile:                      cKeyFile,
 		certFile:                     cCertFile,
+		Alpn:                         buffer,
 	})
 
-	listener := C.Listen(cAddr, C.uint16_t(portInt), config)
+	listener := C.Listen(cAddr, C.uint16_t(portInt), config, buffer)
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, config, cKeyFile, cCertFile)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn)
 	listeners.Store(listener, res)
 	return res, nil
 }

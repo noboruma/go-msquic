@@ -14,8 +14,12 @@ func main() {
 	l, err := quic.ListenAddr("0.0.0.0:9999", quic.Config{
 		MaxIncomingStreams: 1000,
 		MaxIdleTimeout:     5000,
-		CertFile:           "/home/zackel/workspace/proxies/go-msquic/server.cert",
-		KeyFile:            "/home/zackel/workspace/proxies/go-msquic/server.key",
+		/*
+			Generate key & cert via:
+			`openssl req -nodes -new -x509 -keyout /tmp/server.key -out /tmp/server.cert`
+		*/
+		CertFile: "/tmp/server.cert",
+		KeyFile:  "/tmp/server.key",
 	})
 	if err != nil {
 		panic(err)
@@ -27,21 +31,18 @@ func main() {
 			if err != nil {
 				panic(err)
 			}
-			println("[GO] Got new conn")
 			stream, err := conn.OpenStream()
-			println("[GO] Got new stream")
 			if err != nil {
 				panic(err)
 			}
-			stream.Write([]byte("Bye!"))
 			b := make([]byte, 1024)
 			n, err := stream.Read(b)
 			if err != nil {
-				panic("Read error")
+				panic(err.Error())
 			}
 			println("received:", string(b[:n]))
+			stream.Write([]byte("Bye!"))
 		}
 	}()
 	<-c.Done()
-	println("yay")
 }

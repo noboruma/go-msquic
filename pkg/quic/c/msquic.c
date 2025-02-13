@@ -1,4 +1,4 @@
-#include "msquic.h"
+#include "inc/msquic.h"
 #include <stdlib.h>
 
 #define UNREFERENCED_PARAMETER(P) (void)(P)
@@ -19,7 +19,6 @@ extern void closeConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC);
 
 static HQUIC Registration;
-static const QUIC_BUFFER Alpn = { sizeof("quic-backconnect") - 1, (uint8_t*)"quic-backconnect" };
 static const QUIC_API_TABLE* MsQuic;
 static const uint64_t IdleTimeoutMs = 5000;
 
@@ -34,6 +33,7 @@ struct QUICConfig {
 	int KeepAliveMs;
     char * keyFile;
     char * certFile;
+	QUIC_BUFFER Alpn;
 };
 
 static
@@ -54,8 +54,6 @@ StreamWrite(
     QUIC_BUFFER* SendBuffer = (QUIC_BUFFER*)SendBufferRaw;
     SendBuffer->Buffer = (uint8_t*)SendBufferRaw + sizeof(QUIC_BUFFER);
     SendBuffer->Length = len;
-
-    //printf("[strm][%p] Sending data...\n", Stream);
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
@@ -217,9 +215,9 @@ ConnectionCallback(
 		newStreamCallback(Connection, Event->PEER_STREAM_STARTED.Stream);
         break;
     case QUIC_CONNECTION_EVENT_RESUMED:
-		if (LOGS_ENABLED) {
+		//if (LOGS_ENABLED) {
 			printf("[conn][%p] Connection resumed!\n", Connection);
-		}
+		//}
         break;
     default:
         break;
@@ -287,7 +285,7 @@ LoadListenConfiguration(struct QUICConfig cfg)
 	config.CredConfig.CertificateFile = &config.CertFile;
     QUIC_STATUS Status = QUIC_STATUS_SUCCESS;
 	HQUIC configuration;
-    if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(Registration, &Alpn, 1, &Settings,
+    if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(Registration, &cfg.Alpn, 1, &Settings,
 													   sizeof(Settings), NULL, &configuration))) {
         printf("ConfigurationOpen failed, 0x%x!\n", Status);
         return NULL;
@@ -304,7 +302,8 @@ HQUIC
 Listen(
 	_In_ const char* addr,
 	_In_ uint16_t port,
-	_In_ HQUIC configuration
+	_In_ HQUIC configuration,
+	_In_ QUIC_BUFFER Alpn
 )
 {
     QUIC_STATUS Status;
@@ -363,7 +362,7 @@ LoadDialConfiguration(struct QUICConfig cfg)
 	}
 
     QUIC_STATUS Status = QUIC_STATUS_SUCCESS;
-    if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(Registration, &Alpn, 1,
+    if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(Registration, &cfg.Alpn, 1,
 													   &Settings, sizeof(Settings), NULL, &configuration))) {
         printf("ConfigurationOpen failed, 0x%x!\n", Status);
         return NULL;
@@ -414,7 +413,7 @@ DialConnection(
 
 }
 
-static const QUIC_REGISTRATION_CONFIG RegConfig = { "quic-backconnect", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+static const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
 
 // This setup is tight to the process lifetime
 static

@@ -15,15 +15,11 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	println("[GO] got a conn")
 	stream, err := conn.AcceptStream(context.Background())
 	if err != nil {
 		panic(err)
 	}
-	println("[GO] got a stream")
-	buffer := []byte("Hello world")
-	stream.Write([]byte("Hello world"))
-	buffer = []byte("           ")
+	buffer := []byte("Hello")
 	stream.Read(buffer)
 	println("read:", string(buffer))
 }

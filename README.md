@@ -44,8 +44,16 @@ To install `go-msquic`, ensure you have Go installed on your system. Then run th
 ```bash
 go get github.com/noboruma/go-msquic
 
+And use in code via:
+```
+import "github.com/noboruma/go-msquic/pkg/quic"
+```
 ```
 If the prerequisites were done properly, you can now compile your project with `CGO_ENABLED=1` and start using msquic.
+
+## Example
+
+There is a client & server code in the `sample/` directory.
 
 ## License
 
