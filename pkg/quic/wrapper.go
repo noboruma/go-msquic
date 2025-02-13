@@ -14,6 +14,7 @@ package quic
 #cgo nocallback CloseListener
 #cgo nocallback DialConnection
 #cgo nocallback MsQuicSetup
+
 #cgo nocallback GetRemoteAddr
 #cgo nocallback StreamWrite
 
@@ -79,8 +80,7 @@ var connections sync.Map //map[C.HQUIC]MsQuicConn
 func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	listener, has := listeners.Load(l)
 	if !has {
-		println("!!! listener not registered")
-		return
+		panic("Missing listener")
 	}
 	res := newMsQuicConn(c)
 	connections.Store(c, res)
@@ -91,20 +91,18 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 func closeConnectionCallback(c C.HQUIC) {
 	res, has := connections.LoadAndDelete(c)
 	if !has {
-		println("!!! connection close")
-		return
+		panic("Missing connection")
 	}
 	res.(MsQuicConn).remoteClose()
 }
 
 // #cgo noescape newReadCallback
-//
+
 //export newReadCallback
 func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	rawStream, has := streams.Load(s)
 	if !has {
-		println("!!! stream not registered")
-		return
+		panic("stream not registered")
 	}
 	stream := rawStream.(MsQuicStream)
 	stream.buffer.m.Lock()
@@ -112,10 +110,8 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 
 	goBuffer := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
 	_, err := stream.buffer.buffer.Write(goBuffer)
-	// TODO: errors
 	if err != nil {
-		println("!!!", err.Error())
-		return
+		panic(err.Error())
 	}
 	select {
 	case stream.buffer.signal <- struct{}{}:
@@ -127,8 +123,7 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 func newStreamCallback(c C.HQUIC, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
-		println("!!! connection not registered")
-		return
+		panic("connection not registered")
 	}
 	conn := rawConn.(MsQuicConn)
 	res := newMsQuicStream(s)
@@ -140,8 +135,7 @@ func newStreamCallback(c C.HQUIC, s C.HQUIC) {
 func closeStreamCallback(s C.HQUIC) {
 	res, has := streams.LoadAndDelete(s)
 	if !has {
-		println("!!! close stream not registered")
-		return
+		panic("stream not registered")
 	}
 	res.(MsQuicStream).remoteClose()
 }
@@ -170,7 +164,7 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 	var addrLen C.uint32_t = C.uint32_t(unsafe.Sizeof(addr))
 
 	if C.GetRemoteAddr(c, &addr, &addrLen) != 0 {
-		println("remote addr issue")
+		panic("Remote addr issue")
 	}
 
 	var (
@@ -440,11 +434,16 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	cAddr := C.CString(host)
 	defer C.free(unsafe.Pointer(cAddr))
 
+	keepAliveMs := cfg.KeepAlivePeriod
+	if keepAliveMs > cfg.MaxIdleTimeout {
+		keepAliveMs = cfg.MaxIdleTimeout / 2
+	}
+
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
 		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
-		KeepAliveMs:                  C.int(cfg.KeepAlivePeriod) / 4,
+		KeepAliveMs:                  C.int(keepAliveMs),
 	})
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
