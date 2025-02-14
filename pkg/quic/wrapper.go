@@ -487,11 +487,21 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		keepAliveMs = cfg.MaxIdleTimeout / 2
 	}
 
+	cAlpn := C.CString(cfg.Alpn)
+	defer C.free(unsafe.Pointer(cAlpn))
+
+	buffer := C.struct_QUIC_BUFFER{
+		Length: C.uint32_t(len(cfg.Alpn)),
+		Buffer: (*C.uint8_t)(unsafe.Pointer(cAlpn)),
+	}
+	totalOpenedConnections.Add(1)
+
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
 		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
 		KeepAliveMs:                  C.int(keepAliveMs),
+		Alpn:                         buffer,
 	})
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
