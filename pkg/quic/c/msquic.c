@@ -19,9 +19,9 @@ extern void completeWriteCallback(HQUIC);
 extern void closeConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC);
 
-static HQUIC Registration;
-static const QUIC_API_TABLE* MsQuic;
-static const uint64_t IdleTimeoutMs = 5000;
+HQUIC Registration;
+const QUIC_API_TABLE* MsQuic;
+const uint64_t IdleTimeoutMs = 5000;
 
 struct ConnectionContext {
 	HQUIC configuration;
@@ -37,7 +37,6 @@ struct QUICConfig {
 	QUIC_BUFFER Alpn;
 };
 
-static
 int64_t
 StreamWrite(
     _In_ HQUIC Stream,
@@ -66,7 +65,6 @@ StreamWrite(
 	return len;
 }
 
-static
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _Function_class_(QUIC_STREAM_CALLBACK)
 QUIC_STATUS
@@ -128,19 +126,16 @@ StreamCallback(
     return QUIC_STATUS_SUCCESS;
 }
 
-static
 void
 ShutdownConnection(HQUIC connection) {
 	MsQuic->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
 }
 
-static
 void
 ShutdownStream(HQUIC stream) {
 	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
 }
 
-static
 HQUIC
 OpenStream(
     _In_ HQUIC Connection
@@ -166,7 +161,6 @@ OpenStream(
 	return Stream;
 }
 
-static
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _Function_class_(QUIC_CONNECTION_CALLBACK)
 QUIC_STATUS
@@ -227,7 +221,6 @@ ConnectionCallback(
     return QUIC_STATUS_SUCCESS;
 }
 
-static
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Function_class_(QUIC_LISTENER_CALLBACK)
 QUIC_STATUS
@@ -268,7 +261,6 @@ typedef struct QUIC_CREDENTIAL_CONFIG_HELPER {
     };
 } QUIC_CREDENTIAL_CONFIG_HELPER;
 
-static
 HQUIC
 LoadListenConfiguration(struct QUICConfig cfg)
 {
@@ -302,7 +294,6 @@ LoadListenConfiguration(struct QUICConfig cfg)
     return configuration;
 }
 
-static
 HQUIC
 Listen(
 	_In_ const char* addr,
@@ -339,13 +330,11 @@ Listen(
 	return listener;
 }
 
-static
 void CloseListener(HQUIC listener, HQUIC configuration) {
 	MsQuic->ListenerClose(listener);
 	MsQuic->ConfigurationClose(configuration);
 }
 
-static
 HQUIC
 LoadDialConfiguration(struct QUICConfig cfg)
 {
@@ -381,7 +370,6 @@ LoadDialConfiguration(struct QUICConfig cfg)
     return configuration;
 }
 
-static
 HQUIC
 DialConnection(
 	_In_ const char* addr,
@@ -418,10 +406,9 @@ DialConnection(
 
 }
 
-static const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
 
 // This setup is tight to the process lifetime
-static
 int
 MsQuicSetup()
 {
@@ -448,7 +435,6 @@ Error:
     return (int)Status;
 }
 
-static
 int
 GetRemoteAddr(
 	_In_ HQUIC conn,
