@@ -15,6 +15,7 @@
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
 extern void newReadCallback(HQUIC, uint8_t *data, int64_t len);
+extern void completeWriteCallback(HQUIC);
 extern void closeConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC);
 
@@ -79,6 +80,7 @@ StreamCallback(
     UNREFERENCED_PARAMETER(Context);
     switch (Event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
+		completeWriteCallback(Stream);
         free(Event->SEND_COMPLETE.ClientContext);
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Data sent\n", Stream);
@@ -215,9 +217,9 @@ ConnectionCallback(
 		newStreamCallback(Connection, Event->PEER_STREAM_STARTED.Stream);
         break;
     case QUIC_CONNECTION_EVENT_RESUMED:
-		//if (LOGS_ENABLED) {
+		if (LOGS_ENABLED) {
 			printf("[conn][%p] Connection resumed!\n", Connection);
-		//}
+		}
         break;
     default:
         break;
@@ -245,6 +247,9 @@ ListenerCallback(
     case QUIC_LISTENER_EVENT_NEW_CONNECTION:
         MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
         Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, config);
+		if (LOGS_ENABLED) {
+			printf("[conn][%p] new connection\n", Event->NEW_CONNECTION.Connection);
+		}
 		newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
         break;
     default:
@@ -399,7 +404,7 @@ DialConnection(
     }
 
 	if (LOGS_ENABLED) {
-		printf("[conn][%p] Connect... %s\n", connection, addr);
+		printf("[conn][%p] Connect to %s\n", connection, addr);
 	}
 
     if (QUIC_FAILED(Status = MsQuic->ConnectionStart(connection, configuration, QUIC_ADDRESS_FAMILY_UNSPEC,

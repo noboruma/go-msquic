@@ -64,13 +64,12 @@ func closeConnectionCallback(c C.HQUIC) {
 	res.(MsQuicConn).remoteClose()
 }
 
-// #cgo noescape newReadCallback
-
 //export newReadCallback
 func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	rawStream, has := streams.Load(s)
 	if !has {
 		return // already closed
+
 	}
 	stream := rawStream.(MsQuicStream)
 	stream.buffer.m.Lock()
@@ -82,9 +81,20 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 		panic(err.Error()) // not enough RAM
 	}
 	select {
-	case stream.buffer.signal <- struct{}{}:
+	case stream.buffer.readSignal <- struct{}{}:
 	default:
 	}
+}
+
+//export completeWriteCallback
+func completeWriteCallback(s C.HQUIC) {
+	rawStream, has := streams.Load(s)
+	if !has {
+		return // already closed
+
+	}
+	stream := rawStream.(MsQuicStream)
+	stream.buffer.writeSignal <- struct{}{}
 }
 
 //export newStreamCallback
@@ -124,6 +134,7 @@ func init() {
 	go func() {
 		for {
 			<-time.After(5 * time.Second)
+
 			sCount := 0
 			streams.Range(func(_, _ any) bool {
 				sCount += 1
@@ -167,12 +178,18 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		Buffer: (*C.uint8_t)(unsafe.Pointer(cAlpn)),
 	}
 
+	keepAliveMs := cfg.KeepAlivePeriod.Milliseconds()
+	if keepAliveMs > cfg.MaxIdleTimeout.Milliseconds() {
+		keepAliveMs = cfg.MaxIdleTimeout.Milliseconds() / 2
+	}
+
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
-		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
+		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout.Milliseconds()),
 		keyFile:                      cKeyFile,
 		certFile:                     cCertFile,
+		KeepAliveMs:                  C.int(keepAliveMs),
 		Alpn:                         buffer,
 	})
 
@@ -195,9 +212,9 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	cAddr := C.CString(host)
 	defer C.free(unsafe.Pointer(cAddr))
 
-	keepAliveMs := cfg.KeepAlivePeriod
-	if keepAliveMs > cfg.MaxIdleTimeout {
-		keepAliveMs = cfg.MaxIdleTimeout / 2
+	keepAliveMs := cfg.KeepAlivePeriod.Milliseconds()
+	if keepAliveMs > cfg.MaxIdleTimeout.Milliseconds() {
+		keepAliveMs = cfg.MaxIdleTimeout.Milliseconds() / 2
 	}
 
 	cAlpn := C.CString(cfg.Alpn)
@@ -212,7 +229,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
-		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout),
+		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout.Milliseconds()),
 		KeepAliveMs:                  C.int(keepAliveMs),
 		Alpn:                         buffer,
 	})
@@ -242,6 +259,7 @@ func cShutdownConnection(c C.HQUIC) {
 	C.ShutdownConnection(c)
 }
 
+// TODO Add windows support
 func getRemoteAddr(c C.HQUIC) (net.IP, int) {
 	var addr C.struct_sockaddr_storage
 	var addrLen C.uint32_t = C.uint32_t(unsafe.Sizeof(addr))
@@ -256,14 +274,26 @@ func getRemoteAddr(c C.HQUIC) (net.IP, int) {
 	)
 	switch addr.ss_family {
 	case C.AF_INET:
+		addrIn := (*C.struct_sockaddr_in)(unsafe.Pointer(&addr))
+		// For windows use this instead:
+		//ip = net.IPv4(
+		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b1),
+		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b2),
+		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b3),
+		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b4),
+		//	)
+
 		ip = net.IPv4(
-			byte(addr.__ss_padding[2]),
-			byte(addr.__ss_padding[3]),
-			byte(addr.__ss_padding[4]),
-			byte(addr.__ss_padding[5]),
+			byte(addrIn.sin_addr.s_addr>>24&0xFF),
+			byte(addrIn.sin_addr.s_addr>>16&0xFF),
+			byte(addrIn.sin_addr.s_addr>>8&0xFF),
+			byte(addrIn.sin_addr.s_addr&0xFF),
 		)
-		port = (int(addr.__ss_padding[0]) << 8) | int(addr.__ss_padding[1])
-	default:
+		port = int(C.ntohs(addrIn.sin_port))
+	case C.AF_INET6:
+		addrIn6 := (*C.struct_sockaddr_in6)(unsafe.Pointer(&addr))
+		ip = net.IP(((*[16]byte)(unsafe.Pointer(&addrIn6.sin6_addr))[:]))
+		port = int(C.ntohs(addrIn6.sin6_port))
 	}
 
 	return ip, port

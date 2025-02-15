@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"sync/atomic"
+	"time"
 )
 
 // #include "msquic.h"
@@ -22,8 +23,8 @@ type Connection interface {
 
 type Config struct {
 	MaxIncomingStreams int64
-	MaxIdleTimeout     int64
-	KeepAlivePeriod    int64
+	MaxIdleTimeout     time.Duration
+	KeepAlivePeriod    time.Duration
 	CertFile           string
 	KeyFile            string
 	Alpn               string
@@ -84,14 +85,14 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 }
 
 func (mqc MsQuicConn) AcceptStream(ctx context.Context) (MsQuicStream, error) {
+
 	select {
 	case <-ctx.Done():
 	case <-mqc.ctx.Done():
-	case s, open := <-mqc.acceptStreamQueue:
-		if !open {
-			return MsQuicStream{}, fmt.Errorf("closed connection")
+	case s, ok := <-mqc.acceptStreamQueue:
+		if ok {
+			return s, nil
 		}
-		return s, nil
 	}
 	return MsQuicStream{}, fmt.Errorf("closed connection")
 }

@@ -30,14 +30,16 @@ type Stream interface {
 type ReadBuffer struct {
 	buffer        bytes.Buffer
 	m             sync.Mutex
-	signal        chan struct{}
+	readSignal    chan struct{}
+	writeSignal   chan struct{}
 	readDeadline  time.Time
 	writeDeadline time.Time
 }
 
 func (rb *ReadBuffer) Reset() {
 	rb.buffer.Reset()
-	rb.signal = make(chan struct{}, 1)
+	rb.readSignal = make(chan struct{}, 1)
+	rb.writeSignal = make(chan struct{}, 1)
 	rb.readDeadline = time.Time{}
 	rb.writeDeadline = time.Time{}
 }
@@ -45,8 +47,9 @@ func (rb *ReadBuffer) Reset() {
 var readBufferPool = sync.Pool{
 	New: func() any {
 		return &ReadBuffer{
-			buffer: bytes.Buffer{},
-			signal: make(chan struct{}, 1),
+			buffer:      bytes.Buffer{},
+			readSignal:  make(chan struct{}, 1),
+			writeSignal: make(chan struct{}, 1),
 		}
 	},
 }
@@ -95,10 +98,9 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return 0, os.ErrDeadlineExceeded
 			}
-			return 0, io.EOF
-		case <-mqs.buffer.signal:
-			mqs.buffer.m.Lock()
+		case <-mqs.buffer.readSignal:
 		}
+		mqs.buffer.m.Lock()
 	}
 	defer mqs.buffer.m.Unlock()
 
@@ -125,6 +127,7 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 			return int(n), fmt.Errorf("write stream error")
 		}
 	}
+	<-mqs.buffer.writeSignal
 	runtime.KeepAlive(data)
 	return int(offset), nil
 }
