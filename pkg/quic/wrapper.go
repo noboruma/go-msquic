@@ -9,18 +9,19 @@ package quic
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
 #cgo nocallback OpenStream
+
 #cgo nocallback LoadListenConfiguration
 #cgo nocallback Listen
 #cgo nocallback CloseListener
+
 #cgo nocallback DialConnection
+
 #cgo nocallback MsQuicSetup
 
 #cgo nocallback GetRemoteAddr
 #cgo nocallback StreamWrite
 
 #include "c/msquic.c"
-
-
 */
 import "C"
 
@@ -87,6 +88,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 
 	cAddr := C.CString(host)
 	defer C.free(unsafe.Pointer(cAddr))
+
 	cKeyFile := C.CString(cfg.KeyFile)
 	cCertFile := C.CString(cfg.CertFile)
 	cAlpn := C.CString(cfg.Alpn)

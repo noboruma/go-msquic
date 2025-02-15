@@ -47,6 +47,7 @@ func main() {
 			if err != nil && err != io.EOF {
 				panic(err.Error())
 			}
+
 			println("[Client] Hello sent")
 
 			n, err := stream.Read(buffer)

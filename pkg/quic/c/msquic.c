@@ -107,6 +107,7 @@ StreamCallback(
 		}
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
         break;
+
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         //
         // Both directions of the stream have been shut down and MsQuic is done
@@ -262,7 +263,9 @@ typedef struct QUIC_CREDENTIAL_CONFIG_HELPER {
 } QUIC_CREDENTIAL_CONFIG_HELPER;
 
 HQUIC
-LoadListenConfiguration(struct QUICConfig cfg)
+LoadListenConfiguration(
+	_In_ struct QUICConfig cfg
+)
 {
     QUIC_SETTINGS Settings = {0};
     Settings.IdleTimeoutMs = cfg.IdleTimeoutMs;
@@ -406,7 +409,7 @@ DialConnection(
 
 }
 
-const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
+static const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };
 
 // This setup is tight to the process lifetime
 int

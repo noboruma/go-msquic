@@ -35,8 +35,8 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	rawStream, has := streams.Load(s)
 	if !has {
 		return // already closed
-
 	}
+
 	stream := rawStream.(MsQuicStream)
 	stream.buffer.m.Lock()
 	defer stream.buffer.m.Unlock()

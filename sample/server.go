@@ -58,6 +58,7 @@ func main() {
 				panic(err.Error())
 			}
 			println("[Server] Bye! sent")
+
 		}()
 
 		go func() {
@@ -86,6 +87,7 @@ func main() {
 
 		}()
 		wg.Wait()
+		<-time.After(1 * time.Second)
 	}
 	go func() {
 		for c.Err() == nil {

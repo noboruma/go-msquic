@@ -83,7 +83,7 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 	}
 
 	mqs.buffer.m.Lock()
-	for mqs.buffer.buffer.Len() == 0 {
+	if mqs.buffer.buffer.Len() == 0 {
 		ctx := mqs.ctx
 		if !mqs.buffer.readDeadline.IsZero() {
 			var cancel context.CancelFunc
@@ -154,6 +154,7 @@ func (mqs MsQuicStream) SetWriteDeadline(ttl time.Time) error {
 
 func (mqs MsQuicStream) Context() context.Context {
 	return mqs.ctx
+
 }
 
 func (mqs MsQuicStream) Close() error {
