@@ -35,6 +35,22 @@ type ReadBuffer struct {
 	writeDeadline time.Time
 }
 
+func (rb *ReadBuffer) Reset() {
+	rb.buffer.Reset()
+	rb.signal = make(chan struct{}, 1)
+	rb.readDeadline = time.Time{}
+	rb.writeDeadline = time.Time{}
+}
+
+var readBufferPool = sync.Pool{
+	New: func() any {
+		return &ReadBuffer{
+			buffer: bytes.Buffer{},
+			signal: make(chan struct{}, 1),
+		}
+	},
+}
+
 type MsQuicStream struct {
 	stream   C.HQUIC
 	buffer   *ReadBuffer
@@ -45,12 +61,11 @@ type MsQuicStream struct {
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
+	b := readBufferPool.Get().(*ReadBuffer)
+	b.Reset()
 	res := MsQuicStream{
-		stream: s,
-		buffer: &ReadBuffer{
-			buffer: bytes.Buffer{},
-			signal: make(chan struct{}, 1),
-		},
+		stream:   s,
+		buffer:   b,
 		ctx:      ctx,
 		cancel:   cancel,
 		shutdown: new(atomic.Bool),
@@ -85,7 +100,6 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			mqs.buffer.m.Lock()
 		}
 	}
-
 	defer mqs.buffer.m.Unlock()
 
 	return mqs.buffer.buffer.Read(data)
@@ -94,6 +108,11 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	if mqs.shutdown.Load() {
 		return 0, io.EOF
+	}
+	if !mqs.buffer.writeDeadline.IsZero() {
+		if time.Now().After(mqs.buffer.writeDeadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
 	}
 	offset := 0
 	size := len(data)
@@ -124,6 +143,9 @@ func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 }
 
 func (mqs MsQuicStream) SetWriteDeadline(ttl time.Time) error {
+	mqs.buffer.m.Lock()
+	defer mqs.buffer.m.Unlock()
+	mqs.buffer.writeDeadline = ttl
 	return nil
 }
 

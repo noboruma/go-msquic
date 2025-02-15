@@ -106,6 +106,12 @@ func closeStreamCallback(s C.HQUIC) {
 	if !has {
 		return // already closed
 	}
+
+	b := res.(MsQuicStream).buffer
+	b.m.Lock()
+	defer b.m.Unlock()
+	readBufferPool.Put(b)
+
 	totalClosedStreams.Add(1)
 	res.(MsQuicStream).remoteClose()
 }
