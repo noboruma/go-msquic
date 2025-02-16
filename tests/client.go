@@ -31,9 +31,9 @@ func main() {
 		}
 
 		var wg sync.WaitGroup
-		wg.Add(2)
 
 		// Test Open a stream
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			stream, err := conn.OpenStream()
@@ -42,22 +42,32 @@ func main() {
 			}
 			defer stream.Close()
 
-			buffer := []byte("Hello")
-			_, err = stream.Write(buffer)
+			bs := make([]byte, 512*1024)
+			pattern := []byte("Hello")
+			for i := 0; i < len(bs); i++ {
+				bs[i] = pattern[i%len(pattern)]
+			}
+			n, err := stream.Write(bs)
 			if err != nil && err != io.EOF {
 				panic(err.Error())
 			}
 
-			println("[Client] Hello sent")
+			println("[Client] Hello sent:", n)
 
-			n, err := stream.Read(buffer)
-			if err != nil && err != io.EOF {
-				panic(err.Error())
+			totalN := 0
+			stream.SetReadDeadline(time.Now().Add(10 * time.Second))
+			for {
+				n, err = stream.Read(bs)
+				totalN += n
+				if err != nil {
+					break
+				}
 			}
-			println("[Client] received:", string(buffer[:n]))
+			println("[Client] bye received:", totalN)
 		}()
 
 		// Test stream accept
+		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			stream, err := conn.AcceptStream(context.Background())
@@ -66,19 +76,29 @@ func main() {
 			}
 			defer stream.Close()
 
-			var buffer [1024]byte
-			n, err := stream.Read(buffer[:])
-			if err != nil && err != io.EOF {
-				panic(err.Error())
+			var buffer [512 * 1024]byte
+			totalN := 0
+			stream.SetReadDeadline(time.Now().Add(5 * time.Second))
+			for {
+				n, err := stream.Read(buffer[:])
+				totalN += n
+				if err != nil {
+					break
+				}
 			}
-			println("[Client] received:", string(buffer[:n]))
+			println("[Client] hello received:", totalN)
 
-			buffer2 := []byte("Bye!")
-			_, err = stream.Write(buffer2)
+			bs := make([]byte, 512*1024)
+			pattern := []byte("Bye!")
+			for i := 0; i < len(bs); i++ {
+				bs[i] = pattern[i%len(pattern)]
+			}
+			n, err := stream.Write(bs)
 			if err != nil && err != io.EOF {
 				panic(err.Error())
 			}
-			println("[Client] Bye sent")
+			println("[Client] Bye sent", n)
+
 		}()
 
 		wg.Wait()

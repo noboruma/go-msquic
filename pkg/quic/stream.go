@@ -98,13 +98,19 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return 0, os.ErrDeadlineExceeded
 			}
+			return 0, io.EOF
 		case <-mqs.buffer.readSignal:
 		}
 		mqs.buffer.m.Lock()
 	}
 	defer mqs.buffer.m.Unlock()
 
-	return mqs.buffer.buffer.Read(data)
+	n, err := mqs.buffer.buffer.Read(data)
+	if n == 0 { // ignore io.EOF
+		return 0, nil
+	}
+
+	return n, err
 }
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
@@ -126,8 +132,8 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		if n == -1 {
 			return int(n), fmt.Errorf("write stream error")
 		}
+		<-mqs.buffer.writeSignal
 	}
-	<-mqs.buffer.writeSignal
 	runtime.KeepAlive(data)
 	return int(offset), nil
 }

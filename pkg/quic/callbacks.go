@@ -60,7 +60,10 @@ func completeWriteCallback(s C.HQUIC) {
 
 	}
 	stream := rawStream.(MsQuicStream)
-	stream.buffer.writeSignal <- struct{}{}
+	select{
+	case stream.buffer.writeSignal <- struct{}{}:
+	default:
+	}
 }
 
 //export newStreamCallback
