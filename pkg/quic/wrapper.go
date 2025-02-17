@@ -203,11 +203,13 @@ func getRemoteAddr(c C.HQUIC) (net.IP, int) {
 		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b4),
 		//	)
 
+		s_addr := int(C.ntohl(addrIn.sin_addr.s_addr))
+
 		ip = net.IPv4(
-			byte(addrIn.sin_addr.s_addr>>24&0xFF),
-			byte(addrIn.sin_addr.s_addr>>16&0xFF),
-			byte(addrIn.sin_addr.s_addr>>8&0xFF),
-			byte(addrIn.sin_addr.s_addr&0xFF),
+			byte(s_addr>>24&0xFF),
+			byte(s_addr>>16&0xFF),
+			byte(s_addr>>8&0xFF),
+			byte(s_addr&0xFF),
 		)
 		port = int(C.ntohs(addrIn.sin_port))
 	case C.AF_INET6:

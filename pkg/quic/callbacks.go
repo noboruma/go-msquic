@@ -1,6 +1,4 @@
-/*
-export duplicates preambles. This is why callbacks are separated from msquic.c
-*/
+/* export duplicates preambles. This is why callbacks are separated from msquic.c */
 package quic
 
 import "unsafe"
@@ -41,10 +39,13 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	stream.buffer.m.Lock()
 	defer stream.buffer.m.Unlock()
 
-	goBuffer := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
-	_, err := stream.buffer.buffer.Write(goBuffer)
-	if err != nil {
-		panic(err.Error()) // not enough RAM
+	if length > 0 {
+		goBuffer := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
+		_, err := stream.buffer.buffer.Write(goBuffer)
+		if err != nil {
+			println("not enough RAM to achieve: ", length)
+			panic(err.Error())
+		}
 	}
 	select {
 	case stream.buffer.readSignal <- struct{}{}:
@@ -60,7 +61,7 @@ func completeWriteCallback(s C.HQUIC) {
 
 	}
 	stream := rawStream.(MsQuicStream)
-	select{
+	select {
 	case stream.buffer.writeSignal <- struct{}{}:
 	default:
 	}
@@ -89,8 +90,8 @@ func closeStreamCallback(s C.HQUIC) {
 	b := res.(MsQuicStream).buffer
 	b.m.Lock()
 	defer b.m.Unlock()
-	readBufferPool.Put(b)
+	res.(MsQuicStream).remoteClose()
+	readBufferPool.Put(b.buffer)
 
 	totalClosedStreams.Add(1)
-	res.(MsQuicStream).remoteClose()
 }

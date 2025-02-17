@@ -28,35 +28,33 @@ type Stream interface {
 }
 
 type ReadBuffer struct {
-	buffer        bytes.Buffer
-	m             sync.Mutex
+	buffer        *bytes.Buffer
+	m             *sync.Mutex
 	readSignal    chan struct{}
 	writeSignal   chan struct{}
 	readDeadline  time.Time
 	writeDeadline time.Time
 }
 
-func (rb *ReadBuffer) Reset() {
-	rb.buffer.Reset()
-	rb.readSignal = make(chan struct{}, 1)
-	rb.writeSignal = make(chan struct{}, 1)
-	rb.readDeadline = time.Time{}
-	rb.writeDeadline = time.Time{}
+func newReadBuffer(bbuf *bytes.Buffer) ReadBuffer {
+	bbuf.Reset()
+	return ReadBuffer{
+		buffer:      bbuf,
+		m:           &sync.Mutex{},
+		readSignal:  make(chan struct{}, 1),
+		writeSignal: make(chan struct{}, 1),
+	}
 }
 
 var readBufferPool = sync.Pool{
 	New: func() any {
-		return &ReadBuffer{
-			buffer:      bytes.Buffer{},
-			readSignal:  make(chan struct{}, 1),
-			writeSignal: make(chan struct{}, 1),
-		}
+		return bytes.NewBuffer(make([]byte, bytes.MinRead))
 	},
 }
 
 type MsQuicStream struct {
 	stream   C.HQUIC
-	buffer   *ReadBuffer
+	buffer   ReadBuffer
 	ctx      context.Context
 	cancel   context.CancelFunc
 	shutdown *atomic.Bool
@@ -64,11 +62,10 @@ type MsQuicStream struct {
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
-	b := readBufferPool.Get().(*ReadBuffer)
-	b.Reset()
+	b := readBufferPool.Get().(*bytes.Buffer)
 	res := MsQuicStream{
 		stream:   s,
-		buffer:   b,
+		buffer:   newReadBuffer(b),
 		ctx:      ctx,
 		cancel:   cancel,
 		shutdown: new(atomic.Bool),
