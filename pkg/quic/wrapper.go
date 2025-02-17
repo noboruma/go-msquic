@@ -8,6 +8,7 @@ package quic
 
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
+#cgo nocallback AbortStream
 #cgo nocallback OpenStream
 
 #cgo nocallback LoadListenConfiguration
@@ -166,6 +167,9 @@ func cCloseListener(listener, config C.HQUIC) {
 }
 func cShutdownStream(s C.HQUIC) {
 	C.ShutdownStream(s)
+}
+func cAbortStream(s C.HQUIC) {
+	C.AbortStream(s)
 }
 func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t) C.int64_t {
 	return C.StreamWrite(s, cArray, size)

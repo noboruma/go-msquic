@@ -35,20 +35,22 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 		return // already closed
 	}
 
+
 	stream := rawStream.(MsQuicStream)
-	stream.buffer.m.Lock()
-	defer stream.buffer.m.Unlock()
+	state := stream.state
+	state.readBufferAccess.Lock()
+	defer state.readBufferAccess.Unlock()
 
 	if length > 0 {
 		goBuffer := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
-		_, err := stream.buffer.buffer.Write(goBuffer)
+		_, err := state.readBuffer.Write(goBuffer)
 		if err != nil {
 			println("not enough RAM to achieve: ", length)
 			panic(err.Error())
 		}
 	}
 	select {
-	case stream.buffer.readSignal <- struct{}{}:
+	case state.readSignal <- struct{}{}:
 	default:
 	}
 }
@@ -61,8 +63,9 @@ func completeWriteCallback(s C.HQUIC) {
 
 	}
 	stream := rawStream.(MsQuicStream)
+	state := stream.state
 	select {
-	case stream.buffer.writeSignal <- struct{}{}:
+	case state.writeSignal <- struct{}{}:
 	default:
 	}
 }
@@ -87,11 +90,9 @@ func closeStreamCallback(s C.HQUIC) {
 		return // already closed
 	}
 
-	b := res.(MsQuicStream).buffer
-	b.m.Lock()
-	defer b.m.Unlock()
-	res.(MsQuicStream).remoteClose()
-	readBufferPool.Put(b.buffer)
+	stream := res.(MsQuicStream)
+	stream.remoteClose()
+	streamStatePool.Put(stream.state)
 
 	totalClosedStreams.Add(1)
 }

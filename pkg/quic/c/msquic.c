@@ -137,6 +137,11 @@ ShutdownStream(HQUIC stream) {
 	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
 }
 
+void
+AbortStream(HQUIC stream) {
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+}
+
 HQUIC
 OpenStream(
     _In_ HQUIC Connection
