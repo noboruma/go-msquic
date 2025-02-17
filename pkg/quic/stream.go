@@ -31,8 +31,6 @@ var streamStatePool = sync.Pool{
 	New: func() any {
 		return &streamState{
 			readBuffer:    bytes.Buffer{},
-			readSignal:    make(chan struct{}, 1),
-			writeSignal:   make(chan struct{}, 1),
 			readDeadline:  time.Time{},
 			writeDeadline: time.Time{},
 			shutdown:      atomic.Bool{},
@@ -44,8 +42,6 @@ type streamState struct {
 	shutdown         atomic.Bool
 	readBufferAccess sync.RWMutex
 	readBuffer       bytes.Buffer
-	readSignal       chan struct{}
-	writeSignal      chan struct{}
 	readDeadline     time.Time
 	writeDeadline    time.Time
 }
@@ -53,8 +49,6 @@ type streamState struct {
 func (ss *streamState) Reset() {
 	ss.shutdown.Store(false)
 	ss.readBuffer.Reset()
-	ss.readSignal = make(chan struct{}, 1)
-	ss.writeSignal = make(chan struct{}, 1)
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -68,6 +62,7 @@ type MsQuicStream struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	state  *streamState
+	readSignal, writeSignal chan struct{}
 }
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
@@ -79,6 +74,8 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		ctx:    ctx,
 		cancel: cancel,
 		state:  state,
+		readSignal:    make(chan struct{}, 1),
+		writeSignal:   make(chan struct{}, 1),
 	}
 
 	return res
@@ -123,7 +120,7 @@ func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
 		return false
-	case <-mqs.state.readSignal:
+	case <-mqs.readSignal:
 		return true
 	}
 }
@@ -132,7 +129,7 @@ func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
 	select {
 	case <-mqs.ctx.Done():
 		return false
-	case <-mqs.state.writeSignal:
+	case <-mqs.writeSignal:
 		return true
 	}
 }

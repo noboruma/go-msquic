@@ -35,7 +35,6 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 		return // already closed
 	}
 
-
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
 	state.readBufferAccess.Lock()
@@ -50,7 +49,7 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 		}
 	}
 	select {
-	case state.readSignal <- struct{}{}:
+	case stream.readSignal <- struct{}{}:
 	default:
 	}
 }
@@ -63,9 +62,8 @@ func completeWriteCallback(s C.HQUIC) {
 
 	}
 	stream := rawStream.(MsQuicStream)
-	state := stream.state
 	select {
-	case state.writeSignal <- struct{}{}:
+	case stream.writeSignal <- struct{}{}:
 	default:
 	}
 }
