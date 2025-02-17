@@ -27,55 +27,42 @@ type Stream interface {
 	Context() context.Context
 }
 
-var streamStatePool = sync.Pool{
-	New: func() any {
-		return &streamState{
-			readBuffer:    bytes.Buffer{},
-			readDeadline:  time.Time{},
-			writeDeadline: time.Time{},
-			shutdown:      atomic.Bool{},
-		}
-	},
-}
-
 type streamState struct {
 	shutdown         atomic.Bool
-	readBufferAccess sync.RWMutex
+	readBufferAccess sync.Mutex
 	readBuffer       bytes.Buffer
 	readDeadline     time.Time
 	writeDeadline    time.Time
 }
 
-func (ss *streamState) Reset() {
-	ss.shutdown.Store(false)
-	ss.readBuffer.Reset()
-}
-
 func (ss *streamState) hasReadData() bool {
-	ss.readBufferAccess.RLock()
-	defer ss.readBufferAccess.RUnlock()
+	ss.readBufferAccess.Lock()
+	defer ss.readBufferAccess.Unlock()
 	return ss.readBuffer.Len() != 0
 }
 
 type MsQuicStream struct {
-	stream C.HQUIC
-	ctx    context.Context
-	cancel context.CancelFunc
-	state  *streamState
+	stream                  C.HQUIC
+	ctx                     context.Context
+	cancel                  context.CancelFunc
+	state                   *streamState
 	readSignal, writeSignal chan struct{}
 }
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
-	state := streamStatePool.Get().(*streamState)
-	state.Reset()
 	res := MsQuicStream{
-		stream: s,
-		ctx:    ctx,
-		cancel: cancel,
-		state:  state,
-		readSignal:    make(chan struct{}, 1),
-		writeSignal:   make(chan struct{}, 1),
+		stream:      s,
+		ctx:         ctx,
+		cancel:      cancel,
+		state:       &streamState{
+			readBuffer:    bytes.Buffer{},
+			readDeadline:  time.Time{},
+			writeDeadline: time.Time{},
+			shutdown:      atomic.Bool{},
+		},
+		readSignal:  make(chan struct{}, 1),
+		writeSignal: make(chan struct{}, 1),
 	}
 
 	return res
@@ -154,18 +141,17 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	for offset != len(data) {
 		cArray := (*C.uint8_t)(unsafe.Pointer(&data[offset]))
 		n := cStreamWrite(mqs.stream, cArray, C.int64_t(size))
-		offset += int(n)
-		size -= int(n)
 		if n == -1 {
-			return int(n), fmt.Errorf("write stream error")
+			return int(offset), fmt.Errorf("write stream error")
 		}
 		if !mqs.WaitWrite(ctx) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				cAbortStream(mqs.stream)
-				return 0, os.ErrDeadlineExceeded
+				return int(offset), os.ErrDeadlineExceeded
 			}
-			return 0, io.ErrUnexpectedEOF
+			return int(offset), io.ErrUnexpectedEOF
 		}
+		offset += int(n)
+		size -= int(n)
 	}
 	runtime.KeepAlive(data)
 	return int(offset), nil

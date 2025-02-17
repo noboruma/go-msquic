@@ -90,7 +90,6 @@ func closeStreamCallback(s C.HQUIC) {
 
 	stream := res.(MsQuicStream)
 	stream.remoteClose()
-	streamStatePool.Put(stream.state)
 
 	totalClosedStreams.Add(1)
 }

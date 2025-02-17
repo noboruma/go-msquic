@@ -79,7 +79,9 @@ StreamCallback(
     switch (Event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		completeWriteCallback(Stream);
-        free(Event->SEND_COMPLETE.ClientContext);
+		if  (Event->SEND_COMPLETE.ClientContext) {
+			free(Event->SEND_COMPLETE.ClientContext);
+		}
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Data sent\n", Stream);
 		}
