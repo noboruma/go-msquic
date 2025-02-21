@@ -19,13 +19,9 @@ extern void completeWriteCallback(HQUIC);
 extern void closeConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC);
 
-HQUIC Registration;
-const QUIC_API_TABLE* MsQuic;
+HQUIC Registration = NULL;
+const QUIC_API_TABLE* MsQuic = NULL;
 const uint64_t IdleTimeoutMs = 5000;
-
-struct ConnectionContext {
-	HQUIC configuration;
-};
 
 struct QUICConfig {
 	int DisableCertificateValidation;
@@ -239,19 +235,17 @@ ListenerCallback(
     _Inout_ QUIC_LISTENER_EVENT* Event
     )
 {
-	HQUIC config = NULL;
-	if (Context != NULL) {
-		config = ((struct ConnectionContext*) Context) -> configuration;
-	}
     QUIC_STATUS Status = QUIC_STATUS_NOT_SUPPORTED;
     switch (Event->Type) {
     case QUIC_LISTENER_EVENT_NEW_CONNECTION:
-        MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
-        Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, config);
+		MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
+        Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, (HQUIC)Context);
 		if (LOGS_ENABLED) {
 			printf("[conn][%p] new connection\n", Event->NEW_CONNECTION.Connection);
 		}
-		newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
+		if (QUIC_SUCCEEDED(Status)) {
+			newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
+		}
         break;
     default:
         break;
@@ -282,8 +276,7 @@ LoadListenConfiguration(
     Settings.PeerBidiStreamCount = cfg.MaxBidiStreams;
     Settings.IsSet.PeerBidiStreamCount = TRUE;
 
-    QUIC_CREDENTIAL_CONFIG_HELPER config;
-    memset(&config, 0, sizeof(config));
+    QUIC_CREDENTIAL_CONFIG_HELPER config = {0};
     config.CredConfig.Flags = QUIC_CREDENTIAL_FLAG_NONE;
 
 	config.CertFile.CertificateFile = cfg.certFile;
@@ -291,7 +284,7 @@ LoadListenConfiguration(
 	config.CredConfig.Type = QUIC_CREDENTIAL_TYPE_CERTIFICATE_FILE;
 	config.CredConfig.CertificateFile = &config.CertFile;
     QUIC_STATUS Status = QUIC_STATUS_SUCCESS;
-	HQUIC configuration;
+	HQUIC configuration = NULL;
     if (QUIC_FAILED(Status = MsQuic->ConfigurationOpen(Registration, &cfg.Alpn, 1, &Settings,
 													   sizeof(Settings), NULL, &configuration))) {
         printf("ConfigurationOpen failed, 0x%x!\n", Status);
@@ -315,18 +308,15 @@ Listen(
     QUIC_STATUS Status;
     HQUIC listener = NULL;
 
+    if (QUIC_FAILED(Status = MsQuic->ListenerOpen(Registration, ListenerCallback, configuration, &listener))) {
+        printf("ListenerOpen failed, 0x%x!\n", Status);
+		return listener;
+    }
+
     QUIC_ADDR quicAddr = {0};
 	customQuicAddrFromString(addr, port, &quicAddr);
     customQuicAddrSetFamily(&quicAddr, QUIC_ADDRESS_FAMILY_UNSPEC);
     customQuicAddrSetPort(&quicAddr, port);
-
-	struct ConnectionContext * ctx = malloc(sizeof(struct ConnectionContext));
-	ctx->configuration = configuration;
-
-    if (QUIC_FAILED(Status = MsQuic->ListenerOpen(Registration, ListenerCallback, ctx, &listener))) {
-        printf("ListenerOpen failed, 0x%x!\n", Status);
-		return listener;
-    }
 
     if (QUIC_FAILED(Status = MsQuic->ListenerStart(listener, &Alpn, 1, &quicAddr))) {
         printf("ListenerStart failed, 0x%x!\n", Status);
@@ -357,8 +347,7 @@ LoadDialConfiguration(struct QUICConfig cfg)
 	Settings.KeepAliveIntervalMs = cfg.KeepAliveMs;
 	Settings.IsSet.KeepAliveIntervalMs = TRUE;
 
-    QUIC_CREDENTIAL_CONFIG CredConfig;
-    memset(&CredConfig, 0, sizeof(CredConfig));
+    QUIC_CREDENTIAL_CONFIG CredConfig = {0};
     CredConfig.Type = QUIC_CREDENTIAL_TYPE_NONE;
     CredConfig.Flags = QUIC_CREDENTIAL_FLAG_CLIENT;
 	if (cfg.DisableCertificateValidation == TRUE) {

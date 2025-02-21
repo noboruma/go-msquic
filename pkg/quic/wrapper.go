@@ -114,6 +114,10 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		Alpn:                         buffer,
 	})
 
+	if config == nil {
+		return MsQuicListener{}, fmt.Errorf("failed to create config")
+	}
+
 	listener := C.Listen(cAddr, C.uint16_t(portInt), config, buffer)
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")

@@ -52,10 +52,10 @@ type MsQuicStream struct {
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
 	res := MsQuicStream{
-		stream:      s,
-		ctx:         ctx,
-		cancel:      cancel,
-		state:       &streamState{
+		stream: s,
+		ctx:    ctx,
+		cancel: cancel,
+		state: &streamState{
 			readBuffer:    bytes.Buffer{},
 			readDeadline:  time.Time{},
 			writeDeadline: time.Time{},
@@ -64,7 +64,6 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		readSignal:  make(chan struct{}, 1),
 		writeSignal: make(chan struct{}, 1),
 	}
-
 	return res
 }
 
