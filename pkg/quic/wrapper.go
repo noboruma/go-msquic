@@ -103,15 +103,16 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if keepAliveMs > cfg.MaxIdleTimeout.Milliseconds() {
 		keepAliveMs = cfg.MaxIdleTimeout.Milliseconds() / 2
 	}
-
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
-		DisableCertificateValidation: 1,
-		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
-		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout.Milliseconds()),
-		keyFile:                      cKeyFile,
-		certFile:                     cCertFile,
-		KeepAliveMs:                  C.int(keepAliveMs),
-		Alpn:                         buffer,
+		DisableCertificateValidation:  1,
+		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
+		IdleTimeoutMs:                 C.int(cfg.MaxIdleTimeout.Milliseconds()),
+		keyFile:                       cKeyFile,
+		certFile:                      cCertFile,
+		KeepAliveMs:                   C.int(keepAliveMs),
+		Alpn:                          buffer,
+		MaxBindingStatelessOperations: C.int(cfg.MaxBindingStatelessOperations),
+		MaxStatelessOperations:        C.int(cfg.MaxStatelessOperations),
 	})
 
 	if config == nil {

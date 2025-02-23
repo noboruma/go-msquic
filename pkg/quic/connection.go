@@ -22,12 +22,14 @@ type Connection interface {
 }
 
 type Config struct {
-	MaxIncomingStreams int64
-	MaxIdleTimeout     time.Duration
-	KeepAlivePeriod    time.Duration
-	CertFile           string
-	KeyFile            string
-	Alpn               string
+	MaxIncomingStreams            int64
+	MaxIdleTimeout                time.Duration
+	KeepAlivePeriod               time.Duration
+	CertFile                      string
+	KeyFile                       string
+	Alpn                          string
+	MaxBindingStatelessOperations int64
+	MaxStatelessOperations        int64
 }
 
 type MsQuicConn struct {

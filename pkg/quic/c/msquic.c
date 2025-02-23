@@ -30,6 +30,8 @@ struct QUICConfig {
 	int KeepAliveMs;
     char * keyFile;
     char * certFile;
+	int MaxBindingStatelessOperations;
+	int MaxStatelessOperations;
 	QUIC_BUFFER Alpn;
 };
 
@@ -269,12 +271,24 @@ LoadListenConfiguration(
 )
 {
     QUIC_SETTINGS Settings = {0};
-    Settings.IdleTimeoutMs = cfg.IdleTimeoutMs;
-    Settings.IsSet.IdleTimeoutMs = TRUE;
     Settings.ServerResumptionLevel = QUIC_SERVER_RESUME_AND_ZERORTT;
     Settings.IsSet.ServerResumptionLevel = TRUE;
-    Settings.PeerBidiStreamCount = cfg.MaxBidiStreams;
-    Settings.IsSet.PeerBidiStreamCount = TRUE;
+	if (cfg.IdleTimeoutMs != 0) {
+		Settings.IdleTimeoutMs = cfg.IdleTimeoutMs;
+		Settings.IsSet.IdleTimeoutMs = TRUE;
+	}
+	if (cfg.MaxBidiStreams != 0) {
+		Settings.PeerBidiStreamCount = cfg.MaxBidiStreams;
+		Settings.IsSet.PeerBidiStreamCount = TRUE;
+	}
+	if (cfg.MaxBindingStatelessOperations != 0) {
+		Settings.MaxBindingStatelessOperations = cfg.MaxBindingStatelessOperations;
+		Settings.IsSet.MaxBindingStatelessOperations = TRUE;
+	}
+	if (cfg.MaxStatelessOperations != 0) {
+		Settings.MaxStatelessOperations = cfg.MaxStatelessOperations;
+		Settings.IsSet.MaxStatelessOperations = TRUE;
+	}
 
     QUIC_CREDENTIAL_CONFIG_HELPER config = {0};
     config.CredConfig.Flags = QUIC_CREDENTIAL_FLAG_NONE;
