@@ -475,3 +475,14 @@ GetRemoteAddr(
 	}
 	return 0;
 }
+
+extern uint32_t CxPlatProcessorCount;
+int GetPerfCounters(uint64_t *Counters) {
+	uint32_t BufferLength = sizeof(uint64_t)*QUIC_PERF_COUNTER_MAX;
+	MsQuic->GetParam(
+		NULL,
+		QUIC_PARAM_GLOBAL_PERF_COUNTERS,
+		&BufferLength,
+		Counters);
+	return CxPlatProcessorCount;
+}

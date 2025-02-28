@@ -47,29 +47,46 @@ var totalClosedConnections atomic.Int64
 var listeners sync.Map   //map[C.HQUIC]MsQuicListener
 var connections sync.Map //map[C.HQUIC]MsQuicConn
 
+var perfCounterNames = []string{
+	"QUIC_PERF_COUNTER_CONN_CREATED",
+	"QUIC_PERF_COUNTER_CONN_HANDSHAKE_FAIL",
+	"QUIC_PERF_COUNTER_CONN_APP_REJECT",
+	"QUIC_PERF_COUNTER_CONN_RESUMED",
+	"QUIC_PERF_COUNTER_CONN_ACTIVE",
+	"QUIC_PERF_COUNTER_CONN_CONNECTED",
+	"QUIC_PERF_COUNTER_CONN_PROTOCOL_ERRORS",
+	"QUIC_PERF_COUNTER_CONN_NO_ALPN",
+	"QUIC_PERF_COUNTER_STRM_ACTIVE",
+	"QUIC_PERF_COUNTER_PKTS_SUSPECTED_LOST",
+	"QUIC_PERF_COUNTER_PKTS_DROPPED",
+	"QUIC_PERF_COUNTER_PKTS_DECRYPTION_FAIL",
+	"QUIC_PERF_COUNTER_UDP_RECV",
+	"QUIC_PERF_COUNTER_UDP_SEND",
+	"QUIC_PERF_COUNTER_UDP_RECV_BYTES",
+	"QUIC_PERF_COUNTER_UDP_SEND_BYTES",
+	"QUIC_PERF_COUNTER_UDP_RECV_EVENTS",
+	"QUIC_PERF_COUNTER_UDP_SEND_CALLS",
+	"QUIC_PERF_COUNTER_APP_SEND_BYTES",
+	"QUIC_PERF_COUNTER_APP_RECV_BYTES",
+	"QUIC_PERF_COUNTER_CONN_QUEUE_DEPTH",
+	"QUIC_PERF_COUNTER_CONN_OPER_QUEUE_DEPTH",
+	"QUIC_PERF_COUNTER_CONN_OPER_QUEUED",
+	"QUIC_PERF_COUNTER_CONN_OPER_COMPLETED",
+	"QUIC_PERF_COUNTER_WORK_OPER_QUEUE_DEPTH",
+	"QUIC_PERF_COUNTER_WORK_OPER_QUEUED",
+	"QUIC_PERF_COUNTER_WORK_OPER_COMPLETED",
+	"QUIC_PERF_COUNTER_PATH_VALIDATED",
+	"QUIC_PERF_COUNTER_PATH_FAILURE",
+	"QUIC_PERF_COUNTER_SEND_STATELESS_RESET",
+	"QUIC_PERF_COUNTER_SEND_STATELESS_RETRY",
+	"QUIC_PERF_COUNTER_CONN_LOAD_REJECT",
+}
+
 func init() {
 	status := C.MsQuicSetup()
 	if status != 0 {
 		panic(fmt.Sprintf("failed to load quic: %d", status))
 	}
-	go func() {
-		for {
-			<-time.After(5 * time.Second)
-			sCount := 0
-			cCount := 0
-			connections.Range(func(_, connection any) bool {
-				connection.(MsQuicConn).streams.Range(func(_, _ any) bool {
-					sCount += 1
-					return true
-				})
-				cCount += 1
-				return true
-			})
-			println("streams: ", sCount, "connections:", cCount)
-			println("totalOpenedStreams: ", totalOpenedStreams.Load(), "totalClosedStreams:", totalClosedStreams.Load())
-			println("totalOpenedConns: ", totalOpenedConnections.Load(), "totalClosedConns:", totalClosedConnections.Load())
-		}
-	}()
 }
 
 func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
@@ -117,6 +134,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 
 	if config == nil {
 		return MsQuicListener{}, fmt.Errorf("failed to create config")
+
 	}
 
 	listener := C.Listen(cAddr, C.uint16_t(portInt), config, buffer)
@@ -125,6 +143,20 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	}
 	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn)
 	listeners.Store(listener, res)
+
+	if cfg.TracePerfCounts != nil {
+		go func() {
+			timeout := cfg.TracePerfCountReport
+			if timeout.Milliseconds() == 0 {
+				timeout = 30 * time.Second
+			}
+			for ; ; <-time.After(timeout) {
+				counters := cGetPerfCounters()
+				cfg.TracePerfCounts(perfCounterNames, counters)
+			}
+		}()
+	}
+
 	return res, nil
 }
 
@@ -195,6 +227,12 @@ func cStartStream(s C.HQUIC) {
 
 func cShutdownConnection(c C.HQUIC) {
 	C.ShutdownConnection(c)
+}
+
+func cGetPerfCounters() []uint64 {
+	counters := make([]uint64, C.QUIC_PERF_COUNTER_MAX)
+	C.GetPerfCounters((*C.uint64_t)(unsafe.SliceData(counters)))
+	return counters
 }
 
 // TODO Add windows support

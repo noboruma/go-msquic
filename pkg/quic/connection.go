@@ -31,6 +31,8 @@ type Config struct {
 	Alpn                          string
 	MaxBindingStatelessOperations int64
 	MaxStatelessOperations        int64
+	TracePerfCounts               func([]string, []uint64)
+	TracePerfCountReport          time.Duration
 }
 
 type MsQuicConn struct {
