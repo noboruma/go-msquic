@@ -304,6 +304,13 @@ LoadListenConfiguration(
 		Settings.MaxStatelessOperations = cfg.MaxStatelessOperations;
 		Settings.IsSet.MaxStatelessOperations = TRUE;
 	}
+	Settings.MaxOperationsPerDrain = 128;
+	Settings.IsSet.MaxOperationsPerDrain = TRUE;
+
+	Settings.MaxWorkerQueueDelayUs = 2*250000;
+	Settings.IsSet.MaxWorkerQueueDelayUs = TRUE;
+	Settings.MaxAckDelayMs = 100;
+	Settings.IsSet.MaxAckDelayMs = TRUE;
 
     QUIC_CREDENTIAL_CONFIG_HELPER config = {0};
     config.CredConfig.Flags = QUIC_CREDENTIAL_FLAG_NONE;
@@ -474,4 +481,15 @@ GetRemoteAddr(
 		return -1; // Failed to retrieve
 	}
 	return 0;
+}
+
+extern uint32_t CxPlatProcessorCount;
+int GetPerfCounters(uint64_t *Counters) {
+	uint32_t BufferLength = sizeof(uint64_t)*QUIC_PERF_COUNTER_MAX;
+	MsQuic->GetParam(
+		NULL,
+		QUIC_PARAM_GLOBAL_PERF_COUNTERS,
+		&BufferLength,
+		Counters);
+	return CxPlatProcessorCount;
 }
