@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -11,7 +12,7 @@ import (
 // #include "msquic.h"
 import "C"
 
-const streamAcceptQueueSize = 1024
+const streamAcceptQueueSize = 100
 
 type Connection interface {
 	OpenStream() (MsQuicStream, error)
@@ -40,6 +41,7 @@ type MsQuicConn struct {
 	cancel            context.CancelFunc
 	remoteAddr        net.UDPAddr
 	shutdown          *atomic.Bool
+	streams           *sync.Map //map[C.HQUIC]MsQuicStream
 }
 
 func newMsQuicConn(c C.HQUIC) MsQuicConn {
@@ -54,6 +56,7 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 		cancel:            cancel,
 		remoteAddr:        net.UDPAddr{IP: ip, Port: port},
 		shutdown:          new(atomic.Bool),
+		streams:           new(sync.Map),
 	}
 }
 
@@ -76,13 +79,14 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	if mqc.shutdown.Load() {
 		return MsQuicStream{}, fmt.Errorf("closed connection")
 	}
-	stream := cOpenStream(mqc.conn)
+	stream := cCreateStream(mqc.conn)
 	if stream == nil {
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
-	totalOpenedStreams.Add(1)
 	res := newMsQuicStream(stream, mqc.ctx)
-	streams.Store(stream, res)
+	mqc.streams.Store(stream, res)
+	cStartStream(stream)
+	totalOpenedStreams.Add(1)
 	return res, nil
 }
 

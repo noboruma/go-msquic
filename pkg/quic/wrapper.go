@@ -9,7 +9,8 @@ package quic
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
 #cgo nocallback AbortStream
-#cgo nocallback OpenStream
+#cgo nocallback CreateStream
+#cgo nocallback StartStream
 
 #cgo nocallback LoadListenConfiguration
 #cgo nocallback Listen
@@ -39,10 +40,10 @@ import (
 
 var totalOpenedStreams atomic.Int64
 var totalOpenedConnections atomic.Int64
+
 var totalClosedStreams atomic.Int64
 var totalClosedConnections atomic.Int64
 
-var streams sync.Map     //map[C.HQUIC]MsQuicStream
 var listeners sync.Map   //map[C.HQUIC]MsQuicListener
 var connections sync.Map //map[C.HQUIC]MsQuicConn
 
@@ -54,14 +55,13 @@ func init() {
 	go func() {
 		for {
 			<-time.After(5 * time.Second)
-
 			sCount := 0
-			streams.Range(func(_, _ any) bool {
-				sCount += 1
-				return true
-			})
 			cCount := 0
-			connections.Range(func(_, _ any) bool {
+			connections.Range(func(_, connection any) bool {
+				connection.(MsQuicConn).streams.Range(func(_, _ any) bool {
+					sCount += 1
+					return true
+				})
 				cCount += 1
 				return true
 			})
@@ -153,11 +153,13 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	totalOpenedConnections.Add(1)
 
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
-		DisableCertificateValidation: 1,
-		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
-		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout.Milliseconds()),
-		KeepAliveMs:                  C.int(keepAliveMs),
-		Alpn:                         buffer,
+		DisableCertificateValidation:  1,
+		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
+		IdleTimeoutMs:                 C.int(cfg.MaxIdleTimeout.Milliseconds()),
+		KeepAliveMs:                   C.int(keepAliveMs),
+		MaxBindingStatelessOperations: 0,
+		MaxStatelessOperations:        0,
+		Alpn:                          buffer,
 	})
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
@@ -170,18 +172,25 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 func cCloseListener(listener, config C.HQUIC) {
 	C.CloseListener(listener, config)
 }
+
 func cShutdownStream(s C.HQUIC) {
 	C.ShutdownStream(s)
 }
+
 func cAbortStream(s C.HQUIC) {
 	C.AbortStream(s)
 }
+
 func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t) C.int64_t {
 	return C.StreamWrite(s, cArray, size)
 }
 
-func cOpenStream(c C.HQUIC) C.HQUIC {
-	return C.OpenStream(c)
+func cCreateStream(c C.HQUIC) C.HQUIC {
+	return C.CreateStream(c)
+}
+
+func cStartStream(s C.HQUIC) {
+	C.StartStream(s)
 }
 
 func cShutdownConnection(c C.HQUIC) {

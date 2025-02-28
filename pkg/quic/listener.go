@@ -21,7 +21,7 @@ type MsQuicListener struct {
 func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char) MsQuicListener {
 	return MsQuicListener{
 		listener:    c,
-		acceptQueue: make(chan MsQuicConn, 1024),
+		acceptQueue: make(chan MsQuicConn, 150_000),
 		key:         key,
 		cert:        cert,
 		alpn:        alpn,
@@ -31,6 +31,7 @@ func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char) MsQui
 }
 
 func (mql MsQuicListener) Close() error {
+
 	if !mql.shutdown.Swap(true) {
 		cCloseListener(mql.listener, mql.config)
 		C.free(unsafe.Pointer(mql.key))

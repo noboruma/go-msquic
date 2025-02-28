@@ -14,14 +14,13 @@
 // Go bindings
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
-extern void newReadCallback(HQUIC, uint8_t *data, int64_t len);
-extern void completeWriteCallback(HQUIC);
+extern void newReadCallback(HQUIC, HQUIC, uint8_t *data, int64_t len);
+extern void completeWriteCallback(HQUIC, HQUIC);
 extern void closeConnectionCallback(HQUIC);
-extern void closeStreamCallback(HQUIC);
+extern void closeStreamCallback(HQUIC,HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
-const uint64_t IdleTimeoutMs = 5000;
 
 struct QUICConfig {
 	int DisableCertificateValidation;
@@ -73,10 +72,9 @@ StreamCallback(
     _Inout_ QUIC_STREAM_EVENT* Event
     )
 {
-    UNREFERENCED_PARAMETER(Context);
     switch (Event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
-		completeWriteCallback(Stream);
+		completeWriteCallback(Context, Stream);
 		if  (Event->SEND_COMPLETE.ClientContext) {
 			free(Event->SEND_COMPLETE.ClientContext);
 		}
@@ -89,7 +87,7 @@ StreamCallback(
 			printf("[strm][%p] Data received, count: %d\n", Stream, Event->RECEIVE.BufferCount);
 		}
 		for (uint32_t i = 0; i < Event->RECEIVE.BufferCount; i++) {
-			newReadCallback(Stream, Event->RECEIVE.Buffers[i].Buffer, Event->RECEIVE.Buffers[i].Length);
+			newReadCallback(Context, Stream, Event->RECEIVE.Buffers[i].Buffer, Event->RECEIVE.Buffers[i].Length);
 		}
         break;
     case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
@@ -116,7 +114,7 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Stream done\n", Stream);
 		}
-		closeStreamCallback(Stream);
+		closeStreamCallback(Context, Stream);
 		if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
 			MsQuic->StreamClose(Stream);
 		}
@@ -143,28 +141,39 @@ AbortStream(HQUIC stream) {
 }
 
 HQUIC
-OpenStream(
+CreateStream(
     _In_ HQUIC Connection
     )
 {
     QUIC_STATUS Status;
     HQUIC Stream = NULL;
 
-    if (QUIC_FAILED(Status = MsQuic->StreamOpen(Connection, QUIC_STREAM_OPEN_FLAG_NONE, StreamCallback, NULL, &Stream))) {
+	if (LOGS_ENABLED) {
+		printf("[strm][%p] Created...\n", Stream);
+	}
+
+    if (QUIC_FAILED(Status = MsQuic->StreamOpen(Connection, QUIC_STREAM_OPEN_FLAG_NONE, StreamCallback, Connection, &Stream))) {
         printf("StreamOpen failed, 0x%x!\n", Status);
 		return NULL;
     }
 
+	return Stream;
+}
+
+void
+StartStream(
+    _In_ HQUIC Stream
+    )
+{
 	if (LOGS_ENABLED) {
 		printf("[strm][%p] Starting...\n", Stream);
 	}
 
+    QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
         printf("StreamStart failed, 0x%x!\n", Status);
         MsQuic->StreamClose(Stream);
-		return NULL;
     }
-	return Stream;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -213,8 +222,8 @@ ConnectionCallback(
 		if (LOGS_ENABLED) {
 				printf("[strm][%p] Peer started\n", Event->PEER_STREAM_STARTED.Stream);
 		}
-        MsQuic->SetCallbackHandler(Event->PEER_STREAM_STARTED.Stream, (void*)StreamCallback, NULL);
 		newStreamCallback(Connection, Event->PEER_STREAM_STARTED.Stream);
+        MsQuic->SetCallbackHandler(Event->PEER_STREAM_STARTED.Stream, (void*)StreamCallback, Connection);
         break;
     case QUIC_CONNECTION_EVENT_RESUMED:
 		if (LOGS_ENABLED) {
@@ -240,13 +249,15 @@ ListenerCallback(
     QUIC_STATUS Status = QUIC_STATUS_NOT_SUPPORTED;
     switch (Event->Type) {
     case QUIC_LISTENER_EVENT_NEW_CONNECTION:
-		MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
         Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, (HQUIC)Context);
 		if (LOGS_ENABLED) {
 			printf("[conn][%p] new connection\n", Event->NEW_CONNECTION.Connection);
 		}
 		if (QUIC_SUCCEEDED(Status)) {
 			newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
+			MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
+		} else {
+			MsQuic->ConnectionShutdown(Event->NEW_CONNECTION.Connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
 		}
         break;
     default:
@@ -276,6 +287,10 @@ LoadListenConfiguration(
 	if (cfg.IdleTimeoutMs != 0) {
 		Settings.IdleTimeoutMs = cfg.IdleTimeoutMs;
 		Settings.IsSet.IdleTimeoutMs = TRUE;
+	}
+	if (cfg.KeepAliveMs != 0) {
+		Settings.KeepAliveIntervalMs = cfg.KeepAliveMs;
+		Settings.IsSet.KeepAliveIntervalMs = TRUE;
 	}
 	if (cfg.MaxBidiStreams != 0) {
 		Settings.PeerBidiStreamCount = cfg.MaxBidiStreams;

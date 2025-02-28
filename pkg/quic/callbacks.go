@@ -29,8 +29,12 @@ func closeConnectionCallback(c C.HQUIC) {
 }
 
 //export newReadCallback
-func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
-	rawStream, has := streams.Load(s)
+func newReadCallback(c, s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
+	rawConn, has := connections.Load(c)
+	if !has {
+		return // already closed
+	}
+	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		return // already closed
 	}
@@ -55,8 +59,12 @@ func newReadCallback(s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 }
 
 //export completeWriteCallback
-func completeWriteCallback(s C.HQUIC) {
-	rawStream, has := streams.Load(s)
+func completeWriteCallback(c, s C.HQUIC) {
+	rawConn, has := connections.Load(c)
+	if !has {
+		return // already closed
+	}
+	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		return // already closed
 
@@ -69,7 +77,7 @@ func completeWriteCallback(s C.HQUIC) {
 }
 
 //export newStreamCallback
-func newStreamCallback(c C.HQUIC, s C.HQUIC) {
+func newStreamCallback(c, s C.HQUIC) {
 	totalOpenedStreams.Add(1)
 	rawConn, has := connections.Load(c)
 	if !has {
@@ -77,13 +85,17 @@ func newStreamCallback(c C.HQUIC, s C.HQUIC) {
 	}
 	conn := rawConn.(MsQuicConn)
 	res := newMsQuicStream(s, conn.ctx)
-	streams.Store(s, res)
+	rawConn.(MsQuicConn).streams.Store(s, res)
 	conn.acceptStreamQueue <- res
 }
 
 //export closeStreamCallback
-func closeStreamCallback(s C.HQUIC) {
-	res, has := streams.LoadAndDelete(s)
+func closeStreamCallback(c, s C.HQUIC) {
+	rawConn, has := connections.Load(c)
+	if !has {
+		return // already closed
+	}
+	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
 		return // already closed
 	}
