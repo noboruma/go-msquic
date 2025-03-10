@@ -65,6 +65,10 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 func (mqc MsQuicConn) Close() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.streams.Range(func(k, v any) bool {
+			v.(MsQuicStream).Close()
+			return true
+		})
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
@@ -73,6 +77,10 @@ func (mqc MsQuicConn) Close() error {
 func (mqc MsQuicConn) remoteClose() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.streams.Range(func(k, v any) bool {
+			v.(MsQuicStream).remoteClose()
+			return true
+		})
 	}
 	return nil
 }
