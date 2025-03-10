@@ -1,13 +1,12 @@
 package quic
 
 /*
-
 #cgo pkg-config: msquic
-
 #cgo noescape StreamWrite
 
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
+
 #cgo nocallback AbortStream
 #cgo nocallback CreateStream
 #cgo nocallback StartStream

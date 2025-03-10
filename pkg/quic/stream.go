@@ -104,6 +104,8 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 
 func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
 	select {
+	case <-mqs.ctx.Done():
+		return false
 	case <-ctx.Done():
 		return false
 	case <-mqs.readSignal:
@@ -114,6 +116,8 @@ func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
 func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
 	select {
 	case <-mqs.ctx.Done():
+		return false
+	case <-ctx.Done():
 		return false
 	case <-mqs.writeSignal:
 		return true
