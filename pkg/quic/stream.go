@@ -33,6 +33,7 @@ type streamState struct {
 	readBuffer       bytes.Buffer
 	readDeadline     time.Time
 	writeDeadline    time.Time
+	writeAccess      sync.Mutex
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -126,6 +127,8 @@ func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	state := mqs.state
+	state.writeAccess.Lock()
+	defer state.writeAccess.Unlock()
 	if state.shutdown.Load() {
 		return 0, io.EOF
 	}
@@ -181,17 +184,27 @@ func (mqs MsQuicStream) Context() context.Context {
 
 }
 
+// Close is a definitive operation
+// The stream cannot be receive anything after that call
 func (mqs MsQuicStream) Close() error {
+	return mqs.abortClose()
+}
+
+func (mqs MsQuicStream) appClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.cancel()
-		cShutdownStream(mqs.stream)
+		mqs.state.writeAccess.Lock()
+		defer mqs.state.writeAccess.Unlock()
 	}
 	return nil
 }
 
-func (mqs MsQuicStream) remoteClose() error {
+func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.cancel()
+		mqs.state.writeAccess.Lock()
+		defer mqs.state.writeAccess.Unlock()
+		cAbortStream(mqs.stream)
 	}
 	return nil
 }

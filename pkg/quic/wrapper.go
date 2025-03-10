@@ -32,16 +32,9 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 	"unsafe"
 )
-
-var totalOpenedStreams atomic.Int64
-var totalOpenedConnections atomic.Int64
-
-var totalClosedStreams atomic.Int64
-var totalClosedConnections atomic.Int64
 
 var listeners sync.Map   //map[C.HQUIC]MsQuicListener
 var connections sync.Map //map[C.HQUIC]MsQuicConn
@@ -181,7 +174,6 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		Length: C.uint32_t(len(cfg.Alpn)),
 		Buffer: (*C.uint8_t)(unsafe.Pointer(cAlpn)),
 	}
-	totalOpenedConnections.Add(1)
 
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
@@ -220,12 +212,16 @@ func cCreateStream(c C.HQUIC) C.HQUIC {
 	return C.CreateStream(c)
 }
 
-func cStartStream(s C.HQUIC) {
-	C.StartStream(s)
+func cStartStream(s C.HQUIC) int64 {
+	return int64(C.StartStream(s))
 }
 
 func cShutdownConnection(c C.HQUIC) {
 	C.ShutdownConnection(c)
+}
+
+func cAbortConnection(c C.HQUIC) {
+	C.AbortConnection(c)
 }
 
 func cGetPerfCounters() []uint64 {

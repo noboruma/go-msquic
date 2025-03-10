@@ -1,7 +1,9 @@
 /* export duplicates preambles. This is why callbacks are separated from msquic.c */
 package quic
 
-import "unsafe"
+import (
+	"unsafe"
+)
 
 // #include "msquic.h"
 import "C"
@@ -12,7 +14,6 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	if !has {
 		return // already closed
 	}
-	totalOpenedConnections.Add(1)
 	res := newMsQuicConn(c)
 	connections.Store(c, res)
 	listener.(MsQuicListener).acceptQueue <- res
@@ -24,8 +25,7 @@ func closeConnectionCallback(c C.HQUIC) {
 	if !has {
 		return // already closed
 	}
-	totalClosedConnections.Add(1)
-	res.(MsQuicConn).remoteClose()
+	res.(MsQuicConn).appClose()
 }
 
 //export newReadCallback
@@ -78,7 +78,6 @@ func completeWriteCallback(c, s C.HQUIC) {
 
 //export newStreamCallback
 func newStreamCallback(c, s C.HQUIC) {
-	totalOpenedStreams.Add(1)
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
@@ -93,6 +92,7 @@ func newStreamCallback(c, s C.HQUIC) {
 func closeStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
+		println("Close after removed!!")
 		return // already closed
 	}
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
@@ -101,7 +101,6 @@ func closeStreamCallback(c, s C.HQUIC) {
 	}
 
 	stream := res.(MsQuicStream)
-	stream.remoteClose()
+	stream.appClose()
 
-	totalClosedStreams.Add(1)
 }

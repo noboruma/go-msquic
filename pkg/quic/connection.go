@@ -65,14 +65,22 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 func (mqc MsQuicConn) Close() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.streams.Range(func(k, v any) bool {
+			v.(MsQuicStream).abortClose()
+			return true
+		})
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
 }
 
-func (mqc MsQuicConn) remoteClose() error {
+func (mqc MsQuicConn) appClose() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.streams.Range(func(k, v any) bool {
+			v.(MsQuicStream).abortClose()
+			return true
+		})
 	}
 	return nil
 }
@@ -87,8 +95,11 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 	res := newMsQuicStream(stream, mqc.ctx)
 	mqc.streams.Store(stream, res)
-	cStartStream(stream)
-	totalOpenedStreams.Add(1)
+	added := cStartStream(stream)
+	if added == -1 {
+		mqc.streams.Delete(stream)
+		return MsQuicStream{}, fmt.Errorf("stream start error")
+	}
 	return res, nil
 }
 

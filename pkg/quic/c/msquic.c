@@ -96,6 +96,7 @@ StreamCallback(
 		}
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
         break;
+	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
         //
         // The peer aborted its send direction of the stream.
@@ -103,9 +104,8 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
         break;
-
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         //
         // Both directions of the stream have been shut down and MsQuic is done
@@ -131,7 +131,13 @@ ShutdownConnection(HQUIC connection) {
 }
 
 void
+AbortConnection(HQUIC connection) {
+	MsQuic->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_SILENT, 0);
+}
+
+void
 ShutdownStream(HQUIC stream) {
+	// This only shutdown sending part
 	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
 }
 
@@ -160,7 +166,7 @@ CreateStream(
 	return Stream;
 }
 
-void
+uint64_t
 StartStream(
     _In_ HQUIC Stream
     )
@@ -173,7 +179,9 @@ StartStream(
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
         printf("StreamStart failed, 0x%x!\n", Status);
         MsQuic->StreamClose(Stream);
+		return -1;
     }
+	return 0;
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
