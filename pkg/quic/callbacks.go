@@ -92,7 +92,6 @@ func newStreamCallback(c, s C.HQUIC) {
 func closeStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
-		println("Close after removed!!")
 		return // already closed
 	}
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
