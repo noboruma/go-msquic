@@ -34,6 +34,7 @@ type Config struct {
 	TracePerfCounts               func([]string, []uint64)
 	TracePerfCountReport          time.Duration
 	FailOnOpenStream              bool
+	EnableDatagramReceive         bool
 }
 
 type MsQuicConn struct {

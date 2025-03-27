@@ -112,6 +112,10 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if keepAliveMs > cfg.MaxIdleTimeout.Milliseconds() {
 		keepAliveMs = cfg.MaxIdleTimeout.Milliseconds() / 2
 	}
+	enableDatagram := C.int(0)
+	if cfg.EnableDatagramReceive {
+		enableDatagram = C.int(1)
+	}
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
 		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
@@ -122,6 +126,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		Alpn:                          buffer,
 		MaxBindingStatelessOperations: C.int(cfg.MaxBindingStatelessOperations),
 		MaxStatelessOperations:        C.int(cfg.MaxStatelessOperations),
+		EnableDatagramReceive:         enableDatagram,
 	})
 
 	if config == nil {
@@ -175,6 +180,10 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		Buffer: (*C.uint8_t)(unsafe.Pointer(cAlpn)),
 	}
 
+	enableDatagram := C.int(0)
+	if cfg.EnableDatagramReceive {
+		enableDatagram = C.int(1)
+	}
 	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
 		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
@@ -183,6 +192,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		MaxBindingStatelessOperations: 0,
 		MaxStatelessOperations:        0,
 		Alpn:                          buffer,
+		EnableDatagramReceive:         enableDatagram,
 	})
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")

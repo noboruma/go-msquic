@@ -32,6 +32,7 @@ struct QUICConfig {
 	int MaxBindingStatelessOperations;
 	int MaxStatelessOperations;
 	QUIC_BUFFER Alpn;
+	int EnableDatagramReceive;
 };
 
 int64_t
@@ -318,6 +319,10 @@ LoadListenConfiguration(
 		Settings.MaxStatelessOperations = cfg.MaxStatelessOperations;
 		Settings.IsSet.MaxStatelessOperations = TRUE;
 	}
+	if (cfg.EnableDatagramReceive != 0) {
+		Settings.DatagramReceiveEnabled = TRUE;
+		Settings.IsSet.DatagramReceiveEnabled = TRUE;
+	}
 
     QUIC_CREDENTIAL_CONFIG_HELPER config = {0};
     config.CredConfig.Flags = QUIC_CREDENTIAL_FLAG_NONE;
@@ -389,6 +394,11 @@ LoadDialConfiguration(struct QUICConfig cfg)
     Settings.IsSet.PeerBidiStreamCount = TRUE;
 	Settings.KeepAliveIntervalMs = cfg.KeepAliveMs;
 	Settings.IsSet.KeepAliveIntervalMs = TRUE;
+
+	if (cfg.EnableDatagramReceive != 0) {
+		Settings.DatagramReceiveEnabled = TRUE;
+		Settings.IsSet.DatagramReceiveEnabled = TRUE;
+	}
 
     QUIC_CREDENTIAL_CONFIG CredConfig = {0};
     CredConfig.Type = QUIC_CREDENTIAL_TYPE_NONE;
