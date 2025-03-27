@@ -133,7 +133,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream)
 	listeners.Store(listener, res)
 
 	if cfg.TracePerfCounts != nil {
@@ -187,7 +187,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicConn(conn)
+	res := newMsQuicConn(conn, cfg.FailOnOpenStream)
 	connections.Store(conn, res)
 	return res, nil
 }
@@ -209,11 +209,12 @@ func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t) C.int64_t {
 }
 
 func cCreateStream(c C.HQUIC) C.HQUIC {
+
 	return C.CreateStream(c)
 }
 
-func cStartStream(s C.HQUIC) int64 {
-	return int64(C.StartStream(s))
+func cStartStream(s C.HQUIC, fail C.int8_t) int64 {
+	return int64(C.StartStream(s, fail))
 }
 
 func cShutdownConnection(c C.HQUIC) {

@@ -168,15 +168,21 @@ CreateStream(
 
 uint64_t
 StartStream(
-    _In_ HQUIC Stream
+    _In_ HQUIC Stream,
+    _In_ int8_t FailOpen
     )
 {
 	if (LOGS_ENABLED) {
 		printf("[strm][%p] Starting...\n", Stream);
 	}
 
+	enum QUIC_STREAM_START_FLAGS flag = QUIC_STREAM_START_FLAG_NONE;
+	if (FailOpen == 1) {
+		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
+	}
+
     QUIC_STATUS Status;
-    if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, QUIC_STREAM_START_FLAG_NONE))) {
+    if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
         MsQuic->StreamClose(Stream);
 		return -1;

@@ -14,7 +14,7 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	if !has {
 		return // already closed
 	}
-	res := newMsQuicConn(c)
+	res := newMsQuicConn(c, listener.(MsQuicListener).failOnOpenStream)
 	connections.Store(c, res)
 	listener.(MsQuicListener).acceptQueue <- res
 }

@@ -14,19 +14,21 @@ type MsQuicListener struct {
 	listener, config C.HQUIC
 	acceptQueue      chan MsQuicConn
 	// deallocate
-	key, cert, alpn *C.char
-	shutdown        *atomic.Bool
+	key, cert, alpn  *C.char
+	shutdown         *atomic.Bool
+	failOnOpenStream bool
 }
 
-func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char) MsQuicListener {
+func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failOnOpenStream bool) MsQuicListener {
 	return MsQuicListener{
-		listener:    c,
-		acceptQueue: make(chan MsQuicConn, 150_000),
-		key:         key,
-		cert:        cert,
-		alpn:        alpn,
-		config:      config,
-		shutdown:    new(atomic.Bool),
+		listener:         c,
+		acceptQueue:      make(chan MsQuicConn, 150_000),
+		key:              key,
+		cert:             cert,
+		alpn:             alpn,
+		config:           config,
+		shutdown:         new(atomic.Bool),
+		failOnOpenStream: failOnOpenStream,
 	}
 }
 

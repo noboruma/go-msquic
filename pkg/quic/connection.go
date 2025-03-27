@@ -33,6 +33,7 @@ type Config struct {
 	MaxStatelessOperations        int64
 	TracePerfCounts               func([]string, []uint64)
 	TracePerfCountReport          time.Duration
+	FailOnOpenStream              bool
 }
 
 type MsQuicConn struct {
@@ -44,9 +45,10 @@ type MsQuicConn struct {
 	remoteAddr        net.UDPAddr
 	shutdown          *atomic.Bool
 	streams           *sync.Map //map[C.HQUIC]MsQuicStream
+	failOpenStream    bool
 }
 
-func newMsQuicConn(c C.HQUIC) MsQuicConn {
+func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ip, port := getRemoteAddr(c)
@@ -59,6 +61,7 @@ func newMsQuicConn(c C.HQUIC) MsQuicConn {
 		remoteAddr:        net.UDPAddr{IP: ip, Port: port},
 		shutdown:          new(atomic.Bool),
 		streams:           new(sync.Map),
+		failOpenStream:    failOnOpen,
 	}
 }
 
@@ -95,7 +98,12 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 	res := newMsQuicStream(stream, mqc.ctx)
 	mqc.streams.Store(stream, res)
-	added := cStartStream(stream)
+	var added int64
+	if mqc.failOpenStream {
+		added = cStartStream(stream, C.int8_t(1))
+	} else {
+		added = cStartStream(stream, C.int8_t(0))
+	}
 	if added == -1 {
 		mqc.streams.Delete(stream)
 		return MsQuicStream{}, fmt.Errorf("stream start error")
