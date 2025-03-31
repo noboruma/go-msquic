@@ -47,6 +47,7 @@ type MsQuicConn struct {
 	shutdown          *atomic.Bool
 	streams           *sync.Map //map[C.HQUIC]MsQuicStream
 	failOpenStream    bool
+	openStream        *sync.Mutex
 }
 
 func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
@@ -63,12 +64,15 @@ func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
 		shutdown:          new(atomic.Bool),
 		streams:           new(sync.Map),
 		failOpenStream:    failOnOpen,
+		openStream:        new(sync.Mutex),
 	}
 }
 
 func (mqc MsQuicConn) Close() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.openStream.Lock()
+		defer mqc.openStream.Unlock()
 		mqc.streams.Range(func(k, v any) bool {
 			v.(MsQuicStream).abortClose()
 			return true
@@ -81,6 +85,8 @@ func (mqc MsQuicConn) Close() error {
 func (mqc MsQuicConn) appClose() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.openStream.Lock()
+		defer mqc.openStream.Unlock()
 		mqc.streams.Range(func(k, v any) bool {
 			v.(MsQuicStream).abortClose()
 			return true
@@ -90,6 +96,9 @@ func (mqc MsQuicConn) appClose() error {
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
+	mqc.openStream.Lock()
+	defer mqc.openStream.Unlock()
+
 	if mqc.shutdown.Load() {
 		return MsQuicStream{}, fmt.Errorf("closed connection")
 	}

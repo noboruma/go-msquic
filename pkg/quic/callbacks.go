@@ -83,6 +83,12 @@ func newStreamCallback(c, s C.HQUIC) {
 		return // already closed
 	}
 	conn := rawConn.(MsQuicConn)
+	conn.openStream.Lock()
+	defer conn.openStream.Unlock()
+	if conn.shutdown.Load() {
+		cAbortStream(s)
+		return
+	}
 	res := newMsQuicStream(s, conn.ctx)
 	rawConn.(MsQuicConn).streams.Store(s, res)
 	conn.acceptStreamQueue <- res

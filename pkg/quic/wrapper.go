@@ -219,7 +219,6 @@ func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t) C.int64_t {
 }
 
 func cCreateStream(c C.HQUIC) C.HQUIC {
-
 	return C.CreateStream(c)
 }
 
