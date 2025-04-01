@@ -187,7 +187,7 @@ func (mqs MsQuicStream) Context() context.Context {
 // Close is a definitive operation
 // The stream cannot be receive anything after that call
 func (mqs MsQuicStream) Close() error {
-	return mqs.abortClose()
+	return mqs.shutdownClose()
 }
 
 func (mqs MsQuicStream) appClose() error {
@@ -195,6 +195,16 @@ func (mqs MsQuicStream) appClose() error {
 		mqs.cancel()
 		mqs.state.writeAccess.Lock()
 		defer mqs.state.writeAccess.Unlock()
+	}
+	return nil
+}
+
+func (mqs MsQuicStream) shutdownClose() error {
+	if !mqs.state.shutdown.Swap(true) {
+		mqs.cancel()
+		mqs.state.writeAccess.Lock()
+		defer mqs.state.writeAccess.Unlock()
+		cShutdownStream(mqs.stream)
 	}
 	return nil
 }
