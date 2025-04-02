@@ -140,6 +140,7 @@ void
 ShutdownStream(HQUIC stream) {
 	// This only shutdown sending part
 	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT_RECEIVE, 0);
 }
 
 void

@@ -207,6 +207,7 @@ func cCloseListener(listener, config C.HQUIC) {
 }
 
 func cShutdownStream(s C.HQUIC) {
+	// Gracefully send and abort receive
 	C.ShutdownStream(s)
 }
 
