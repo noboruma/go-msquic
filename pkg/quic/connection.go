@@ -74,7 +74,7 @@ func (mqc MsQuicConn) Close() error {
 		mqc.openStream.Lock()
 		defer mqc.openStream.Unlock()
 		mqc.streams.Range(func(k, v any) bool {
-			v.(MsQuicStream).abortClose()
+			v.(MsQuicStream).shutdownClose()
 			return true
 		})
 		cShutdownConnection(mqc.conn)

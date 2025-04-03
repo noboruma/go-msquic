@@ -99,6 +99,7 @@ StreamCallback(
         break;
 	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
+    case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
         //
         // The peer aborted its send direction of the stream.
         //
@@ -139,8 +140,7 @@ AbortConnection(HQUIC connection) {
 void
 ShutdownStream(HQUIC stream) {
 	// This only shutdown sending part
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT_RECEIVE, 0);
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL|QUIC_STREAM_SHUTDOWN_FLAG_ABORT_RECEIVE, 0);
 }
 
 void

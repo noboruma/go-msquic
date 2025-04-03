@@ -204,15 +204,17 @@ func (mqs MsQuicStream) shutdownClose() error {
 		mqs.cancel()
 		mqs.state.writeAccess.Lock()
 		defer mqs.state.writeAccess.Unlock()
-		cShutdownStream(mqs.stream)
+		cAbortStream(mqs.stream)
 	}
 	return nil
 }
 
 func (mqs MsQuicStream) abortClose() error {
-	mqs.cancel()
-	mqs.state.writeAccess.Lock()
-	defer mqs.state.writeAccess.Unlock()
-	cAbortStream(mqs.stream)
+	if !mqs.state.shutdown.Swap(true) {
+		mqs.cancel()
+		mqs.state.writeAccess.Lock()
+		defer mqs.state.writeAccess.Unlock()
+		cAbortStream(mqs.stream)
+	}
 	return nil
 }

@@ -96,6 +96,7 @@ func newStreamCallback(c, s C.HQUIC) {
 
 //export closeStreamCallback
 func closeStreamCallback(c, s C.HQUIC) {
+
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
