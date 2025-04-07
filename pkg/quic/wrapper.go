@@ -2,23 +2,29 @@ package quic
 
 /*
 #cgo pkg-config: msquic
+#cgo noescape ShutdownConnection
+#cgo noescape ShutdownStream
+#cgo noescape AbortStream
+#cgo noescape CreateStream
+#cgo noescape StartStream
+#cgo noescape LoadListenConfiguration
+#cgo noescape Listen
+#cgo noescape CloseListener
+#cgo noescape DialConnection
+#cgo noescape MsQuicSetup
+#cgo noescape GetRemoteAddr
 #cgo noescape StreamWrite
 
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
-
 #cgo nocallback AbortStream
 #cgo nocallback CreateStream
 #cgo nocallback StartStream
-
 #cgo nocallback LoadListenConfiguration
 #cgo nocallback Listen
 #cgo nocallback CloseListener
-
 #cgo nocallback DialConnection
-
 #cgo nocallback MsQuicSetup
-
 #cgo nocallback GetRemoteAddr
 #cgo nocallback StreamWrite
 

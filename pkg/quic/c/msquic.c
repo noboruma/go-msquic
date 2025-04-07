@@ -45,7 +45,7 @@ StreamWrite(
     char* SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
     if (SendBufferRaw == NULL) {
         printf("SendBuffer allocation failed!\n");
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
         return -1;
     }
 	memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, len);
@@ -54,10 +54,10 @@ StreamWrite(
     SendBuffer->Length = len;
 
     QUIC_STATUS Status;
-    if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
+    if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_CANCEL_ON_LOSS, SendBuffer))) {
         printf("StreamSend failed, 0x%x!\n", Status);
         free(SendBufferRaw);
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
 		return -1;
     }
 	return len;
@@ -140,12 +140,12 @@ AbortConnection(HQUIC connection) {
 void
 ShutdownStream(HQUIC stream) {
 	// This only shutdown sending part
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL|QUIC_STREAM_SHUTDOWN_FLAG_ABORT_RECEIVE, 0);
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
 }
 
 void
 AbortStream(HQUIC stream) {
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_INLINE, 0);
 }
 
 HQUIC
@@ -181,12 +181,12 @@ StartStream(
 	enum QUIC_STREAM_START_FLAGS flag = QUIC_STREAM_START_FLAG_NONE;
 	if (FailOpen == 1) {
 		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
+		flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 	}
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
-        MsQuic->StreamClose(Stream);
 		return -1;
     }
 	return 0;
