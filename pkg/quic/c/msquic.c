@@ -33,6 +33,8 @@ struct QUICConfig {
 	int MaxStatelessOperations;
 	QUIC_BUFFER Alpn;
 	int EnableDatagramReceive;
+	int DisableSendBuffering;
+	int MaxBytesPerKey;
 };
 
 int64_t
@@ -54,7 +56,7 @@ StreamWrite(
     SendBuffer->Length = len;
 
     QUIC_STATUS Status;
-    if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_CANCEL_ON_LOSS, SendBuffer))) {
+    if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
         printf("StreamSend failed, 0x%x!\n", Status);
         free(SendBufferRaw);
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
@@ -324,6 +326,14 @@ LoadListenConfiguration(
 		Settings.DatagramReceiveEnabled = TRUE;
 		Settings.IsSet.DatagramReceiveEnabled = TRUE;
 	}
+	if (cfg.DisableSendBuffering != 0) {
+		Settings.SendBufferingEnabled = FALSE;
+		Settings.IsSet.SendBufferingEnabled = TRUE;
+	}
+	if (cfg.MaxBytesPerKey != 0) {
+		Settings.MaxBytesPerKey = cfg.MaxBytesPerKey;
+		Settings.IsSet.MaxBytesPerKey = TRUE;
+	}
 
     QUIC_CREDENTIAL_CONFIG_HELPER config = {0};
     config.CredConfig.Flags = QUIC_CREDENTIAL_FLAG_NONE;
@@ -399,6 +409,14 @@ LoadDialConfiguration(struct QUICConfig cfg)
 	if (cfg.EnableDatagramReceive != 0) {
 		Settings.DatagramReceiveEnabled = TRUE;
 		Settings.IsSet.DatagramReceiveEnabled = TRUE;
+	}
+	if (cfg.DisableSendBuffering != 0) {
+		Settings.SendBufferingEnabled = FALSE;
+		Settings.IsSet.SendBufferingEnabled = TRUE;
+	}
+	if (cfg.MaxBytesPerKey != 0) {
+		Settings.MaxBytesPerKey = cfg.MaxBytesPerKey;
+		Settings.IsSet.MaxBytesPerKey = TRUE;
 	}
 
     QUIC_CREDENTIAL_CONFIG CredConfig = {0};

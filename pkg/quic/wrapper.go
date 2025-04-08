@@ -121,6 +121,11 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	enableDatagram := C.int(0)
 	if cfg.EnableDatagramReceive {
 		enableDatagram = C.int(1)
+
+	}
+	disableSendBuffering := C.int(0)
+	if cfg.DisableSendBuffering {
+		disableSendBuffering = C.int(1)
 	}
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
@@ -133,6 +138,8 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		MaxBindingStatelessOperations: C.int(cfg.MaxBindingStatelessOperations),
 		MaxStatelessOperations:        C.int(cfg.MaxStatelessOperations),
 		EnableDatagramReceive:         enableDatagram,
+		DisableSendBuffering:          disableSendBuffering,
+		MaxBytesPerKey:                C.int(cfg.MaxBytesPerKey),
 	})
 
 	if config == nil {

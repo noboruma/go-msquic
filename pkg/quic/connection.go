@@ -35,6 +35,8 @@ type Config struct {
 	TracePerfCountReport          time.Duration
 	FailOnOpenStream              bool
 	EnableDatagramReceive         bool
+	DisableSendBuffering          bool
+	MaxBytesPerKey                int64
 }
 
 type MsQuicConn struct {

@@ -116,8 +116,6 @@ func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
 
 func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
 	select {
-	case <-mqs.ctx.Done():
-		return false
 	case <-ctx.Done():
 		return false
 	case <-mqs.writeSignal:
@@ -148,7 +146,7 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		cArray := (*C.uint8_t)(unsafe.Pointer(&data[offset]))
 		n := cStreamWrite(mqs.stream, cArray, C.int64_t(size))
 		if n == -1 {
-			return int(offset), fmt.Errorf("write stream error")
+			return int(offset), fmt.Errorf("write stream error %x %v", mqs.stream, size)
 		}
 		if !mqs.WaitWrite(ctx) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
