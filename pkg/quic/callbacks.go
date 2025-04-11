@@ -16,7 +16,9 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	}
 	res := newMsQuicConn(c, listener.(MsQuicListener).failOnOpenStream)
 	connections.Store(c, res)
+
 	listener.(MsQuicListener).acceptQueue <- res
+
 }
 
 //export closeConnectionCallback
@@ -90,12 +92,33 @@ func newStreamCallback(c, s C.HQUIC) {
 		return
 	}
 	res := newMsQuicStream(s, conn.ctx)
-	rawConn.(MsQuicConn).streams.Store(s, res)
-	conn.acceptStreamQueue <- res
+	select {
+	case conn.acceptStreamQueue <- res:
+		rawConn.(MsQuicConn).streams.Store(s, res)
+	default:
+		cAbortStream(s)
+	}
 }
 
 //export closeStreamCallback
 func closeStreamCallback(c, s C.HQUIC) {
+
+	rawConn, has := connections.Load(c)
+	if !has {
+		return // already closed
+	}
+	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
+	if !has {
+		return // already closed
+	}
+
+	stream := res.(MsQuicStream)
+	stream.appClose()
+
+}
+
+//export closePeerStreamCallback
+func closePeerStreamCallback(c, s C.HQUIC) {
 
 	rawConn, has := connections.Load(c)
 	if !has {

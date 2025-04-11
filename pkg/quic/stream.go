@@ -33,7 +33,7 @@ type streamState struct {
 	readBuffer       bytes.Buffer
 	readDeadline     time.Time
 	writeDeadline    time.Time
-	writeAccess      sync.Mutex
+	closeAccess      sync.Mutex
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -48,10 +48,12 @@ type MsQuicStream struct {
 	cancel                  context.CancelFunc
 	state                   *streamState
 	readSignal, writeSignal chan struct{}
+	peerSignal              chan struct{}
 }
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
+
 	res := MsQuicStream{
 		stream: s,
 		ctx:    ctx,
@@ -64,6 +66,7 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		},
 		readSignal:  make(chan struct{}, 1),
 		writeSignal: make(chan struct{}, 1),
+		peerSignal:  make(chan struct{}, 1),
 	}
 	return res
 }
@@ -105,8 +108,6 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 
 func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
 	select {
-	case <-mqs.ctx.Done():
-		return false
 	case <-ctx.Done():
 		return false
 	case <-mqs.readSignal:
@@ -125,8 +126,8 @@ func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	state := mqs.state
-	state.writeAccess.Lock()
-	defer state.writeAccess.Unlock()
+	state.closeAccess.Lock()
+	defer state.closeAccess.Unlock()
 	if state.shutdown.Load() {
 		return 0, io.EOF
 	}
@@ -189,28 +190,44 @@ func (mqs MsQuicStream) Close() error {
 }
 
 func (mqs MsQuicStream) appClose() error {
-	if !mqs.state.shutdown.Swap(true) {
-		mqs.cancel()
-		mqs.state.writeAccess.Lock()
-		defer mqs.state.writeAccess.Unlock()
-	}
+	mqs.peerClose()
+	mqs.cancel()
+	mqs.state.closeAccess.Lock()
+	defer mqs.state.closeAccess.Unlock()
+	mqs.state.shutdown.Store(true)
 	return nil
 }
 
 func (mqs MsQuicStream) shutdownClose() error {
+	mqs.state.closeAccess.Lock()
+	defer mqs.state.closeAccess.Unlock()
+	mqs.cancel()
+
 	if !mqs.state.shutdown.Swap(true) {
-		mqs.state.writeAccess.Lock()
-		defer mqs.state.writeAccess.Unlock()
-		mqs.cancel()
 		cShutdownStream(mqs.stream)
+		select {
+
+		case <-mqs.peerSignal:
+		case <-time.After(3 * time.Second):
+			cAbortStream(mqs.stream)
+		}
 	}
 	return nil
 }
 
 func (mqs MsQuicStream) abortClose() error {
+	mqs.state.closeAccess.Lock()
+	defer mqs.state.closeAccess.Unlock()
+	mqs.cancel()
 	if !mqs.state.shutdown.Swap(true) {
-		mqs.cancel()
 		cAbortStream(mqs.stream)
 	}
 	return nil
+}
+
+func (mqs MsQuicStream) peerClose() {
+	select {
+	case mqs.peerSignal <- struct{}{}:
+	default:
+	}
 }

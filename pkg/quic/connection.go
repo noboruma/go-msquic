@@ -71,28 +71,36 @@ func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
 }
 
 func (mqc MsQuicConn) Close() error {
+	mqc.openStream.Lock()
+	defer mqc.openStream.Unlock()
+	mqc.cancel()
 	if !mqc.shutdown.Swap(true) {
-		mqc.cancel()
-		mqc.openStream.Lock()
-		defer mqc.openStream.Unlock()
 		mqc.streams.Range(func(k, v any) bool {
 			v.(MsQuicStream).shutdownClose()
 			return true
 		})
+		close(mqc.acceptStreamQueue)
+		for s := range mqc.acceptStreamQueue {
+			s.shutdownClose()
+		}
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
 }
 
 func (mqc MsQuicConn) appClose() error {
+	mqc.openStream.Lock()
+	defer mqc.openStream.Unlock()
+	mqc.cancel()
 	if !mqc.shutdown.Swap(true) {
-		mqc.cancel()
-		mqc.openStream.Lock()
-		defer mqc.openStream.Unlock()
 		mqc.streams.Range(func(k, v any) bool {
 			v.(MsQuicStream).abortClose()
 			return true
 		})
+		close(mqc.acceptStreamQueue)
+		for s := range mqc.acceptStreamQueue {
+			s.abortClose()
+		}
 	}
 	return nil
 }
@@ -109,7 +117,6 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
 	res := newMsQuicStream(stream, mqc.ctx)
-	mqc.streams.Store(stream, res)
 	var added int64
 	if mqc.failOpenStream {
 		added = cStartStream(stream, C.int8_t(1))
@@ -119,6 +126,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	if added == -1 {
 		mqc.streams.Delete(stream)
 		return MsQuicStream{}, fmt.Errorf("stream start error")
+	} else {
+		mqc.streams.Store(stream, res)
 	}
 	return res, nil
 }

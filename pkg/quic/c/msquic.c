@@ -18,6 +18,8 @@ extern void newReadCallback(HQUIC, HQUIC, uint8_t *data, int64_t len);
 extern void completeWriteCallback(HQUIC, HQUIC);
 extern void closeConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
+extern void closePeerStreamCallback(HQUIC,HQUIC);
+extern void ackPeerStreamCallback(HQUIC,HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -47,7 +49,6 @@ StreamWrite(
     char* SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
     if (SendBufferRaw == NULL) {
         printf("SendBuffer allocation failed!\n");
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
         return -1;
     }
 	memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, len);
@@ -59,7 +60,6 @@ StreamWrite(
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
         printf("StreamSend failed, 0x%x!\n", Status);
         free(SendBufferRaw);
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
 		return -1;
     }
 	return len;
@@ -94,14 +94,8 @@ StreamCallback(
 		}
         break;
     case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
-		if (LOGS_ENABLED) {
-			printf("[strm][%p] Peer shut down\n", Stream);
-		}
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
-        break;
 	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
-    case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
         //
         // The peer aborted its send direction of the stream.
         //
@@ -109,7 +103,11 @@ StreamCallback(
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
+		closePeerStreamCallback(Context, Stream);
         break;
+    case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
+		closePeerStreamCallback(Context, Stream);
+		break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         //
         // Both directions of the stream have been shut down and MsQuic is done
@@ -147,7 +145,7 @@ ShutdownStream(HQUIC stream) {
 
 void
 AbortStream(HQUIC stream) {
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_INLINE, 0);
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 }
 
 HQUIC
@@ -189,6 +187,7 @@ StartStream(
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
+		MsQuic->StreamClose(Stream);
 		return -1;
     }
 	return 0;
