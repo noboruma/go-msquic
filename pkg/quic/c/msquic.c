@@ -102,8 +102,8 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
 		closePeerStreamCallback(Context, Stream);
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT|QUIC_STREAM_SHUTDOWN_FLAG_IMMEDIATE, 0);
         break;
     case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
 		closePeerStreamCallback(Context, Stream);

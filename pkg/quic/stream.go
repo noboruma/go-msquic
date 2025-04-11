@@ -143,7 +143,7 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	}
 	offset := 0
 	size := len(data)
-	for offset != len(data) {
+	for offset != len(data) && ctx.Err() == nil {
 		cArray := (*C.uint8_t)(unsafe.Pointer(&data[offset]))
 		n := cStreamWrite(mqs.stream, cArray, C.int64_t(size))
 		if n == -1 {
@@ -159,7 +159,10 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		size -= int(n)
 	}
 	runtime.KeepAlive(data)
-	return int(offset), nil
+	if ctx.Err() != nil {
+		return int(offset), ctx.Err()
+	}
+	return len(data), nil
 }
 
 func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
@@ -206,7 +209,6 @@ func (mqs MsQuicStream) shutdownClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		cShutdownStream(mqs.stream)
 		select {
-
 		case <-mqs.peerSignal:
 		case <-time.After(3 * time.Second):
 			cAbortStream(mqs.stream)
@@ -216,9 +218,10 @@ func (mqs MsQuicStream) shutdownClose() error {
 }
 
 func (mqs MsQuicStream) abortClose() error {
+	mqs.peerClose()
+	mqs.cancel()
 	mqs.state.closeAccess.Lock()
 	defer mqs.state.closeAccess.Unlock()
-	mqs.cancel()
 	if !mqs.state.shutdown.Swap(true) {
 		cAbortStream(mqs.stream)
 	}

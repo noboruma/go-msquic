@@ -127,7 +127,10 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		mqc.streams.Delete(stream)
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	} else {
-		mqc.streams.Store(stream, res)
+		_, loaded := mqc.streams.LoadOrStore(stream, res)
+		if loaded {
+			println("PANIC")
+		}
 	}
 	return res, nil
 }
