@@ -98,6 +98,7 @@ func completeWriteCallback(c, s C.HQUIC) {
 func newStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
+		cAbortStream(s)
 		return // already closed
 	}
 	conn := rawConn.(MsQuicConn)

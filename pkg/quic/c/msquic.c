@@ -94,9 +94,9 @@ StreamCallback(
 			newReadCallback(Context, Stream, Event->RECEIVE.Buffers[i].Buffer, Event->RECEIVE.Buffers[i].Length);
 		}
         break;
-    case QUIC_STREAM_EVENT_PEER_SEND_SHUTDOWN:
 	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
     case QUIC_STREAM_EVENT_PEER_SEND_ABORTED:
+    case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
         //
         // The peer aborted its send direction of the stream.
         //
@@ -106,10 +106,6 @@ StreamCallback(
 		closePeerStreamCallback(Context, Stream);
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
         break;
-    case QUIC_STREAM_EVENT_SEND_SHUTDOWN_COMPLETE:
-		closePeerStreamCallback(Context, Stream);
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
-		break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         //
         // Both directions of the stream have been shut down and MsQuic is done
