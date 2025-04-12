@@ -49,11 +49,14 @@ type MsQuicStream struct {
 	state                   *streamState
 	readSignal, writeSignal chan struct{}
 	peerSignal              chan struct{}
+	ID                      int
 }
+
+var globalID atomic.Int32
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
-
+	id := globalID.Add(1)
 	res := MsQuicStream{
 		stream: s,
 		ctx:    ctx,
@@ -67,13 +70,14 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		readSignal:  make(chan struct{}, 1),
 		writeSignal: make(chan struct{}, 1),
 		peerSignal:  make(chan struct{}, 1),
+		ID:          int(id),
 	}
 	return res
 }
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
 	state := mqs.state
-	if state.shutdown.Load() {
+	if mqs.ctx.Err() != nil {
 		return 0, io.EOF
 	}
 
@@ -128,10 +132,10 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	state := mqs.state
 	state.closeAccess.Lock()
 	defer state.closeAccess.Unlock()
-	if state.shutdown.Load() {
+	ctx := mqs.ctx
+	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
-	ctx := mqs.ctx
 	deadline := state.writeDeadline
 	if !deadline.IsZero() {
 		if time.Now().After(deadline) {
@@ -144,10 +148,9 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	offset := 0
 	size := len(data)
 	for offset != len(data) && ctx.Err() == nil {
-		cArray := (*C.uint8_t)(unsafe.Pointer(&data[offset]))
-		n := cStreamWrite(mqs.stream, cArray, C.int64_t(size))
+		n := cStreamWrite(mqs.stream, (*C.uint8_t)(unsafe.SliceData(data[offset:])), C.int64_t(size))
 		if n == -1 {
-			return int(offset), fmt.Errorf("write stream error %x %v", mqs.stream, size)
+			return int(offset), fmt.Errorf("write stream error %v/%v", offset, size)
 		}
 		if !mqs.WaitWrite(ctx) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -202,10 +205,9 @@ func (mqs MsQuicStream) appClose() error {
 }
 
 func (mqs MsQuicStream) shutdownClose() error {
+	mqs.cancel()
 	mqs.state.closeAccess.Lock()
 	defer mqs.state.closeAccess.Unlock()
-	mqs.cancel()
-
 	if !mqs.state.shutdown.Swap(true) {
 		cShutdownStream(mqs.stream)
 		select {

@@ -30,12 +30,26 @@ func closeConnectionCallback(c C.HQUIC) {
 	res.(MsQuicConn).appClose()
 }
 
+//export closePeerConnectionCallback
+func closePeerConnectionCallback(c C.HQUIC) {
+
+	res, has := connections.Load(c)
+
+	if !has {
+		return // already closed
+	}
+
+	res.(MsQuicConn).peerClose()
+}
+
 //export newReadCallback
 func newReadCallback(c, s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
 	}
+	rawConn.(MsQuicConn).openStream.Lock()
+	defer rawConn.(MsQuicConn).openStream.Unlock()
 	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		return // already closed
@@ -66,6 +80,8 @@ func completeWriteCallback(c, s C.HQUIC) {
 	if !has {
 		return // already closed
 	}
+	rawConn.(MsQuicConn).openStream.Lock()
+	defer rawConn.(MsQuicConn).openStream.Unlock()
 	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		return // already closed
@@ -87,10 +103,11 @@ func newStreamCallback(c, s C.HQUIC) {
 	conn := rawConn.(MsQuicConn)
 	conn.openStream.Lock()
 	defer conn.openStream.Unlock()
-	if conn.shutdown.Load() {
+	if conn.ctx.Err() != nil {
 		cAbortStream(s)
 		return
 	}
+
 	res := newMsQuicStream(s, conn.ctx)
 	select {
 	case conn.acceptStreamQueue <- res:
@@ -107,6 +124,8 @@ func closeStreamCallback(c, s C.HQUIC) {
 	if !has {
 		return // already closed
 	}
+	rawConn.(MsQuicConn).openStream.Lock()
+	defer rawConn.(MsQuicConn).openStream.Unlock()
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
 		return // already closed
@@ -124,6 +143,8 @@ func closePeerStreamCallback(c, s C.HQUIC) {
 	if !has {
 		return // already closed
 	}
+	rawConn.(MsQuicConn).openStream.Lock()
+	defer rawConn.(MsQuicConn).openStream.Unlock()
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
 		return // already closed
