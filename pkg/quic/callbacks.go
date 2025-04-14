@@ -74,26 +74,6 @@ func newReadCallback(c, s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 	}
 }
 
-//export completeWriteCallback
-func completeWriteCallback(c, s C.HQUIC) {
-	rawConn, has := connections.Load(c)
-	if !has {
-		return // already closed
-	}
-	rawConn.(MsQuicConn).openStream.Lock()
-	defer rawConn.(MsQuicConn).openStream.Unlock()
-	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
-	if !has {
-		return // already closed
-
-	}
-	stream := rawStream.(MsQuicStream)
-	select {
-	case stream.writeSignal <- struct{}{}:
-	default:
-	}
-}
-
 //export newStreamCallback
 func newStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)

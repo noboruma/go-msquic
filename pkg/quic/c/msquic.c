@@ -15,7 +15,6 @@
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
 extern void newReadCallback(HQUIC, HQUIC, uint8_t *data, int64_t len);
-extern void completeWriteCallback(HQUIC, HQUIC);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
@@ -78,7 +77,6 @@ StreamCallback(
 {
     switch (Event->Type) {
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
-		completeWriteCallback(Context, Stream);
 		if  (Event->SEND_COMPLETE.ClientContext) {
 			free(Event->SEND_COMPLETE.ClientContext);
 		}
