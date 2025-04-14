@@ -43,20 +43,16 @@ func (ss *streamState) hasReadData() bool {
 }
 
 type MsQuicStream struct {
-	stream                  C.HQUIC
-	ctx                     context.Context
-	cancel                  context.CancelFunc
-	state                   *streamState
-	readSignal, writeSignal chan struct{}
-	peerSignal              chan struct{}
-	ID                      int
+	stream     C.HQUIC
+	ctx        context.Context
+	cancel     context.CancelFunc
+	state      *streamState
+	readSignal chan struct{}
+	peerSignal chan struct{}
 }
-
-var globalID atomic.Int32
 
 func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
-	id := globalID.Add(1)
 	res := MsQuicStream{
 		stream: s,
 		ctx:    ctx,
@@ -67,10 +63,8 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 			writeDeadline: time.Time{},
 			shutdown:      atomic.Bool{},
 		},
-		readSignal:  make(chan struct{}, 1),
-		writeSignal: make(chan struct{}, 1),
-		peerSignal:  make(chan struct{}, 1),
-		ID:          int(id),
+		readSignal: make(chan struct{}, 1),
+		peerSignal: make(chan struct{}, 1),
 	}
 	return res
 }
@@ -92,7 +86,7 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			ctx, cancel = context.WithDeadline(ctx, deadline)
 			defer cancel()
 		}
-		if !mqs.WaitRead(ctx) {
+		if !mqs.waitRead(ctx) {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return 0, os.ErrDeadlineExceeded
 			}
@@ -110,20 +104,11 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 	return n, err
 }
 
-func (mqs MsQuicStream) WaitRead(ctx context.Context) bool {
+func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	case <-mqs.readSignal:
-		return true
-	}
-}
-
-func (mqs MsQuicStream) WaitWrite(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-mqs.writeSignal:
 		return true
 	}
 }
@@ -152,18 +137,15 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		if n == -1 {
 			return int(offset), fmt.Errorf("write stream error %v/%v", offset, size)
 		}
-		if !mqs.WaitWrite(ctx) {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return int(offset), os.ErrDeadlineExceeded
-			}
-			return int(offset), io.ErrUnexpectedEOF
-		}
 		offset += int(n)
 		size -= int(n)
 	}
 	runtime.KeepAlive(data)
 	if ctx.Err() != nil {
-		return int(offset), ctx.Err()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return int(offset), os.ErrDeadlineExceeded
+		}
+		return int(offset), io.ErrUnexpectedEOF
 	}
 	return len(data), nil
 }
