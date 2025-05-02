@@ -5,5 +5,5 @@ includedir=${prefix}/src/inc
 Name: MSQuic-libmsquic
 Version: 1.0.0
 Description: MS quic library
-Libs: -L${libdir} -lmsquic
+Libs: -L${libdir} -lmsquic -lnuma
 Cflags: -I${includedir}
