@@ -19,6 +19,8 @@ extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
+extern void startStreamCallback(HQUIC,HQUIC);
+extern void startConnectionCallback(HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -75,6 +77,9 @@ StreamCallback(
     )
 {
     switch (Event->Type) {
+	case QUIC_STREAM_EVENT_START_COMPLETE:
+		startStreamCallback(Context, Stream);
+		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		if  (Event->SEND_COMPLETE.ClientContext) {
 			free(Event->SEND_COMPLETE.ClientContext);
@@ -203,6 +208,7 @@ ConnectionCallback(
 		if (LOGS_ENABLED) {
 			printf("[conn][%p] Connected\n", Connection);
 		}
+		startConnectionCallback(Connection);
         MsQuic->ConnectionSendResumptionTicket(Connection, QUIC_SEND_RESUMPTION_FLAG_NONE, 0, NULL);
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_INITIATED_BY_TRANSPORT:
@@ -353,11 +359,8 @@ LoadListenConfiguration(
 }
 
 HQUIC
-Listen(
-	_In_ const char* addr,
-	_In_ uint16_t port,
-	_In_ HQUIC configuration,
-	_In_ QUIC_BUFFER Alpn
+CreateListener(
+	_In_ HQUIC configuration
 )
 {
     QUIC_STATUS Status;
@@ -368,6 +371,19 @@ Listen(
 		return listener;
     }
 
+	return listener;
+}
+
+int
+StartListener(
+    _In_ HQUIC listener,
+	_In_ const char* addr,
+	_In_ uint16_t port,
+	_In_ QUIC_BUFFER Alpn
+)
+{
+    QUIC_STATUS Status;
+
     QUIC_ADDR quicAddr = {0};
 	customQuicAddrFromString(addr, port, &quicAddr);
     customQuicAddrSetFamily(&quicAddr, QUIC_ADDRESS_FAMILY_UNSPEC);
@@ -375,14 +391,14 @@ Listen(
 
     if (QUIC_FAILED(Status = MsQuic->ListenerStart(listener, &Alpn, 1, &quicAddr))) {
         printf("ListenerStart failed, 0x%x!\n", Status);
-		return listener;
+		return -1;
     }
 
 	if (LOGS_ENABLED) {
 		printf("Listen to %s:%d\n", addr, port);
 	}
 
-	return listener;
+	return 0;
 }
 
 void CloseListener(HQUIC listener, HQUIC configuration) {
@@ -438,7 +454,22 @@ LoadDialConfiguration(struct QUICConfig cfg)
 }
 
 HQUIC
-DialConnection(
+OpenConnection()
+{
+    QUIC_STATUS Status;
+    HQUIC connection = NULL;
+
+    if (QUIC_FAILED(Status = MsQuic->ConnectionOpen(Registration, ConnectionCallback, NULL, &connection))) {
+        printf("ConnectionOpen failed, 0x%x!\n", Status);
+		return NULL;
+    }
+
+	return connection;
+}
+
+void
+StartConnection(
+	_In_ HQUIC connection ,
 	_In_ const char* addr,
 	_In_ uint16_t port,
 	_In_ struct QUICConfig cfg
@@ -448,29 +479,15 @@ DialConnection(
 
     HQUIC configuration = LoadDialConfiguration(cfg);
 	if (!configuration) {
-        return NULL;
+        return;
     }
-
-    HQUIC connection = NULL;
-
-    if (QUIC_FAILED(Status = MsQuic->ConnectionOpen(Registration, ConnectionCallback, NULL, &connection))) {
-        printf("ConnectionOpen failed, 0x%x!\n", Status);
-		return NULL;
-    }
-
-	if (LOGS_ENABLED) {
-		printf("[conn][%p] Connect to %s\n", connection, addr);
-	}
 
     if (QUIC_FAILED(Status = MsQuic->ConnectionStart(connection, configuration, QUIC_ADDRESS_FAMILY_UNSPEC,
 		addr, port))) {
         printf("ConnectionStart failed, 0x%x!\n", Status);
         MsQuic->ConnectionClose(connection);
-		return NULL;
+		return;
     }
-
-	return connection;
-
 }
 
 static const QUIC_REGISTRATION_CONFIG RegConfig = { "go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY };

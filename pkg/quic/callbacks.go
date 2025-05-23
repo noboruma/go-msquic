@@ -115,3 +115,38 @@ func closeStreamCallback(c, s C.HQUIC) {
 	stream.appClose()
 
 }
+
+//export startStreamCallback
+func startStreamCallback(c, s C.HQUIC) {
+
+	rawConn, has := connections.Load(c)
+	if !has {
+		println("PANIC no conn for start stream")
+		return // already closed
+	}
+	res, has := rawConn.(MsQuicConn).streams.Load(s)
+	if !has {
+		println("PANIC no stream for start stream")
+		return // already closed
+	}
+
+	select {
+	case res.(MsQuicStream).state.startSignal <- struct{}{}:
+	default:
+	}
+}
+
+//export startConnectionCallback
+func startConnectionCallback(c C.HQUIC) {
+
+	res, has := connections.Load(c)
+	if !has {
+		println("PANIC no conn for start conn")
+		return // already closed
+	}
+
+	select {
+	case res.(MsQuicConn).startSignal <- struct{}{}:
+	default:
+	}
+}

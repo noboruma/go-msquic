@@ -34,6 +34,7 @@ type streamState struct {
 	readDeadline     time.Time
 	writeDeadline    time.Time
 	writeAccess      sync.Mutex
+	startSignal      chan struct{}
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -62,11 +63,21 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 			readDeadline:  time.Time{},
 			writeDeadline: time.Time{},
 			shutdown:      atomic.Bool{},
+			startSignal:   make(chan struct{}, 1),
 		},
 		readSignal: make(chan struct{}, 1),
 		peerSignal: make(chan struct{}, 1),
 	}
 	return res
+}
+
+func (mqs MsQuicStream) waitStart() bool {
+	select {
+	case <-mqs.state.startSignal:
+		return true
+	case <-mqs.Context().Done():
+	}
+	return false
 }
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {

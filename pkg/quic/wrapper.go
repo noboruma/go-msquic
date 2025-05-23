@@ -8,9 +8,11 @@ package quic
 #cgo noescape CreateStream
 #cgo noescape StartStream
 #cgo noescape LoadListenConfiguration
-#cgo noescape Listen
+#cgo noescape CreateListener
+#cgo noescape StartListener
 #cgo noescape CloseListener
-#cgo noescape DialConnection
+#cgo noescape OpenConnection
+#cgo noescape StartConnection
 #cgo noescape MsQuicSetup
 #cgo noescape GetRemoteAddr
 #cgo noescape StreamWrite
@@ -21,9 +23,11 @@ package quic
 #cgo nocallback CreateStream
 #cgo nocallback StartStream
 #cgo nocallback LoadListenConfiguration
-#cgo nocallback Listen
+#cgo nocallback CreateListener
+#cgo nocallback StartListener
 #cgo nocallback CloseListener
-#cgo nocallback DialConnection
+#cgo nocallback OpenConnection
+#cgo nocallback StartConnection
 #cgo nocallback MsQuicSetup
 #cgo nocallback GetRemoteAddr
 #cgo nocallback StreamWrite
@@ -147,12 +151,17 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 
 	}
 
-	listener := C.Listen(cAddr, C.uint16_t(portInt), config, buffer)
+	listener := C.CreateListener(config)
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
 	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream)
 	listeners.Store(listener, res)
+
+	status := C.StartListener(listener, cAddr, C.uint16_t(portInt), buffer)
+	if status != 0 {
+		return MsQuicListener{}, fmt.Errorf("error creating listener")
+	}
 
 	if cfg.TracePerfCounts != nil {
 		go func() {
@@ -197,7 +206,17 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	if cfg.EnableDatagramReceive {
 		enableDatagram = C.int(1)
 	}
-	conn := C.DialConnection(cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
+	conn := C.OpenConnection()
+	if conn == nil {
+		return MsQuicConn{}, fmt.Errorf("error creating listener")
+	}
+	res := newMsQuicConn(conn, cfg.FailOnOpenStream)
+	_, load := connections.LoadOrStore(conn, res)
+	if load {
+		println("PANIC already registered connection")
+	}
+
+	C.StartConnection(conn, cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
 		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
 		IdleTimeoutMs:                 C.int(cfg.MaxIdleTimeout.Milliseconds()),
@@ -207,11 +226,10 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		Alpn:                          buffer,
 		EnableDatagramReceive:         enableDatagram,
 	})
-	if conn == nil {
-		return MsQuicConn{}, fmt.Errorf("error creating listener")
+	select {
+	case <-res.startSignal:
+	case <-ctx.Done():
 	}
-	res := newMsQuicConn(conn, cfg.FailOnOpenStream)
-	connections.Store(conn, res)
 	return res, nil
 }
 
