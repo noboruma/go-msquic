@@ -14,7 +14,7 @@
 // Go bindings
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
-extern void newReadCallback(HQUIC, HQUIC, uint8_t *data, int64_t len);
+extern void newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
@@ -88,8 +88,8 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Data received, count: %d\n", Stream, Event->RECEIVE.BufferCount);
 		}
-		for (uint32_t i = 0; i < Event->RECEIVE.BufferCount; i++) {
-			newReadCallback(Context, Stream, Event->RECEIVE.Buffers[i].Buffer, Event->RECEIVE.Buffers[i].Length);
+		if (Event->RECEIVE.BufferCount > 0) {
+			newReadCallback(Context, Stream, Event->RECEIVE.Buffers, Event->RECEIVE.BufferCount);
 		}
         break;
 	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:

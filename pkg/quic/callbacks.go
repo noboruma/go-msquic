@@ -46,7 +46,8 @@ func closePeerConnectionCallback(c C.HQUIC) {
 }
 
 //export newReadCallback
-func newReadCallback(c, s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
+func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_t) {
+
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
@@ -60,17 +61,12 @@ func newReadCallback(c, s C.HQUIC, buffer *C.uint8_t, length C.int64_t) {
 
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
-	state.readBufferAccess.Lock()
-	defer state.readBufferAccess.Unlock()
 
-	if length > 0 {
-		goBuffer := unsafe.Slice((*byte)(unsafe.Pointer(buffer)), length)
-		_, err := state.readBuffer.Write(goBuffer)
-		if err != nil {
-			println("not enough RAM to achieve: ", length)
-			panic(err.Error())
-		}
+	state.readBufferAccess.Lock()
+	for _, buffer := range unsafe.Slice(buffers, bufferCount) {
+		state.readBuffer.Write(unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
 	}
+	state.readBufferAccess.Unlock()
 	select {
 	case stream.readSignal <- struct{}{}:
 	default:
