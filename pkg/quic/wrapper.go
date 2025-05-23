@@ -38,6 +38,7 @@ import "C"
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"net"
 	"strconv"
@@ -272,44 +273,39 @@ func cGetPerfCounters() []uint64 {
 	return counters
 }
 
+func QUICAddrToIPPort(addr *C.QUIC_ADDR) (net.IP, int) {
+	sa := (*C.struct_sockaddr)(unsafe.Pointer(addr))
+	switch sa.sa_family {
+	case C.AF_INET:
+		ipv4 := (*C.struct_sockaddr_in)(unsafe.Pointer(addr))
+		ip := net.IPv4(
+			byte(ipv4.sin_addr.s_addr),
+			byte(ipv4.sin_addr.s_addr>>8),
+			byte(ipv4.sin_addr.s_addr>>16),
+			byte(ipv4.sin_addr.s_addr>>24),
+		)
+		port := int(binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&ipv4.sin_port))[:]))
+		return ip, port
+
+	case C.AF_INET6:
+		ipv6 := (*C.struct_sockaddr_in6)(unsafe.Pointer(addr))
+		ip := net.IP((*[16]byte)(unsafe.Pointer(&ipv6.sin6_addr))[:])
+		port := int(binary.BigEndian.Uint16((*[2]byte)(unsafe.Pointer(&ipv6.sin6_port))[:]))
+		return ip, port
+
+	default:
+		return nil, 0
+	}
+}
+
 // TODO Add windows support
 func getRemoteAddr(c C.HQUIC) (net.IP, int) {
-	var addr C.struct_sockaddr_storage
+	var addr C.QUIC_ADDR
 	var addrLen C.uint32_t = C.uint32_t(unsafe.Sizeof(addr))
 
 	if C.GetRemoteAddr(c, &addr, &addrLen) != 0 {
 		return nil, 0
 	}
 
-	var (
-		ip   net.IP
-		port int
-	)
-	switch addr.ss_family {
-	case C.AF_INET:
-		addrIn := (*C.struct_sockaddr_in)(unsafe.Pointer(&addr))
-		// For windows use this instead:
-		//ip = net.IPv4(
-		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b1),
-		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b2),
-		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b3),
-		//	byte(addrIn.sin_addr.S_un.S_un_b.s_b4),
-		//	)
-
-		s_addr := int(C.ntohl(addrIn.sin_addr.s_addr))
-
-		ip = net.IPv4(
-			byte(s_addr>>24&0xFF),
-			byte(s_addr>>16&0xFF),
-			byte(s_addr>>8&0xFF),
-			byte(s_addr&0xFF),
-		)
-		port = int(C.ntohs(addrIn.sin_port))
-	case C.AF_INET6:
-		addrIn6 := (*C.struct_sockaddr_in6)(unsafe.Pointer(&addr))
-		ip = net.IP(((*[16]byte)(unsafe.Pointer(&addrIn6.sin6_addr))[:]))
-		port = int(C.ntohs(addrIn6.sin6_port))
-	}
-
-	return ip, port
+	return QUICAddrToIPPort(&addr)
 }

@@ -522,7 +522,7 @@ Error:
 int
 GetRemoteAddr(
 	_In_ HQUIC conn,
-	_Out_ struct sockaddr_storage* addr,
+	_Out_ QUIC_ADDR* addr,
 	_Out_ uint32_t* addrLen
 )
 {
