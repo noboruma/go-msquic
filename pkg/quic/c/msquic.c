@@ -18,7 +18,6 @@ extern void newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
-extern void closePeerStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 
 HQUIC Registration = NULL;
@@ -101,7 +100,7 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
-		closePeerStreamCallback(Context, Stream);
+		closeStreamCallback(Context, Stream);
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
         break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:

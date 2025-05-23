@@ -115,22 +115,3 @@ func closeStreamCallback(c, s C.HQUIC) {
 	stream.appClose()
 
 }
-
-//export closePeerStreamCallback
-func closePeerStreamCallback(c, s C.HQUIC) {
-
-	rawConn, has := connections.Load(c)
-	if !has {
-		return // already closed
-	}
-	rawConn.(MsQuicConn).openStream.Lock()
-	defer rawConn.(MsQuicConn).openStream.Unlock()
-	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
-	if !has {
-		return // already closed
-	}
-
-	stream := res.(MsQuicStream)
-	stream.appClose()
-
-}
