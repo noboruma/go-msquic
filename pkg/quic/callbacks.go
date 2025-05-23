@@ -52,8 +52,8 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 	if !has {
 		return // already closed
 	}
-	rawConn.(MsQuicConn).openStream.Lock()
-	defer rawConn.(MsQuicConn).openStream.Unlock()
+	rawConn.(MsQuicConn).openStream.RLock()
+	defer rawConn.(MsQuicConn).openStream.RUnlock()
 	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		return // already closed
@@ -81,8 +81,8 @@ func newStreamCallback(c, s C.HQUIC) {
 		return // already closed
 	}
 	conn := rawConn.(MsQuicConn)
-	conn.openStream.Lock()
-	defer conn.openStream.Unlock()
+	conn.openStream.RLock()
+	defer conn.openStream.RUnlock()
 	if conn.ctx.Err() != nil {
 		cAbortStream(s)
 		return
@@ -124,6 +124,8 @@ func startStreamCallback(c, s C.HQUIC) {
 		println("PANIC no conn for start stream")
 		return // already closed
 	}
+	rawConn.(MsQuicConn).openStream.RLock()
+	defer rawConn.(MsQuicConn).openStream.RUnlock()
 	res, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		println("PANIC no stream for start stream")

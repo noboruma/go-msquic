@@ -49,7 +49,7 @@ type MsQuicConn struct {
 	shutdown          *atomic.Bool
 	streams           *sync.Map //map[C.HQUIC]MsQuicStream
 	failOpenStream    bool
-	openStream        *sync.Mutex
+	openStream        *sync.RWMutex
 	startSignal       chan struct{}
 }
 
@@ -67,7 +67,7 @@ func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
 		shutdown:          new(atomic.Bool),
 		streams:           new(sync.Map),
 		failOpenStream:    failOnOpen,
-		openStream:        new(sync.Mutex),
+		openStream:        new(sync.RWMutex),
 		startSignal:       make(chan struct{}, 1),
 	}
 }
@@ -126,15 +126,15 @@ func (mqc MsQuicConn) appClose() error {
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
-	mqc.openStream.Lock()
+	mqc.openStream.RLock()
 
 	if mqc.ctx.Err() != nil {
-		mqc.openStream.Unlock()
+		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("closed connection")
 	}
 	stream := cCreateStream(mqc.conn)
 	if stream == nil {
-		mqc.openStream.Unlock()
+		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
 	res := newMsQuicStream(stream, mqc.ctx)
@@ -149,10 +149,10 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		println("PANIC")
 	}
 	if cStartStream(stream, enable) == -1 {
-		mqc.openStream.Unlock()
+		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
-	mqc.openStream.Unlock()
+	mqc.openStream.RUnlock()
 	if !res.waitStart() {
 		return MsQuicStream{}, fmt.Errorf("stream start failed")
 	}
