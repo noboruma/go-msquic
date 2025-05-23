@@ -15,10 +15,13 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 		return // already closed
 	}
 	res := newMsQuicConn(c, listener.(MsQuicListener).failOnOpenStream)
-	connections.Store(c, res)
 
-	listener.(MsQuicListener).acceptQueue <- res
-
+	select {
+	case listener.(MsQuicListener).acceptQueue <- res:
+		connections.Store(c, res)
+	default:
+		cAbortConnection(c)
+	}
 }
 
 //export closeConnectionCallback
