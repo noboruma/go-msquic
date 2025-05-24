@@ -542,3 +542,39 @@ int GetPerfCounters(uint64_t *Counters) {
 		Counters);
 	return CxPlatProcessorCount;
 }
+
+QUIC_STREAM_STATISTICS
+GetStreamStats(HQUIC s) {
+	QUIC_STREAM_STATISTICS res = {0};
+	uint32_t size = sizeof(res);
+	MsQuic->GetParam(
+		s,
+		QUIC_PARAM_STREAM_STATISTICS,
+		&size,
+		&res);
+	return res;
+}
+
+QUIC_STATISTICS_V2
+GetConnStats(HQUIC c) {
+	QUIC_STATISTICS_V2 res = {0};
+	uint32_t size = sizeof(res);
+	MsQuic->GetParam(
+		c,
+		QUIC_PARAM_CONN_STATISTICS_V2,
+		&size,
+		&res);
+	return res;
+}
+
+QUIC_LISTENER_STATISTICS
+GetListenerStats(HQUIC l) {
+	QUIC_LISTENER_STATISTICS res = {0};
+	uint32_t size = sizeof(res);
+	MsQuic->GetParam(
+		l,
+		QUIC_PARAM_LISTENER_STATS,
+		&size,
+		&res);
+	return res;
+}

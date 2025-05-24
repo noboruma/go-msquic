@@ -308,4 +308,17 @@ func getRemoteAddr(c C.HQUIC) (net.IP, int) {
 	}
 
 	return QUICAddrToIPPort(&addr)
+
+}
+
+func cGetStreamStats(s C.HQUIC) C.QUIC_STREAM_STATISTICS {
+	return C.GetStreamStats(s)
+}
+
+func cGetConnStats(c C.HQUIC) C.QUIC_STATISTICS_V2 {
+	return C.GetConnStats(c)
+}
+
+func cGetListenerStats(l C.HQUIC) C.QUIC_LISTENER_STATISTICS {
+	return C.GetListenerStats(l)
 }

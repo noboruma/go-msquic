@@ -22,7 +22,7 @@ type MsQuicListener struct {
 func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failOnOpenStream bool) MsQuicListener {
 	return MsQuicListener{
 		listener:         c,
-		acceptQueue:      make(chan MsQuicConn, 1_000),
+		acceptQueue:      make(chan MsQuicConn, 10_000),
 		key:              key,
 		cert:             cert,
 		alpn:             alpn,

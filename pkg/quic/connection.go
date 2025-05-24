@@ -12,7 +12,7 @@ import (
 // #include "msquic.h"
 import "C"
 
-const streamAcceptQueueSize = 100
+const streamAcceptQueueSize = 1000
 
 type Connection interface {
 	OpenStream() (MsQuicStream, error)

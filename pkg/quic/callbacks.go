@@ -16,10 +16,11 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	}
 	res := newMsQuicConn(c, listener.(MsQuicListener).failOnOpenStream)
 
+	connections.Store(c, res)
 	select {
 	case listener.(MsQuicListener).acceptQueue <- res:
-		connections.Store(c, res)
 	default:
+		connections.Delete(c)
 		cAbortConnection(c)
 	}
 }
@@ -89,10 +90,11 @@ func newStreamCallback(c, s C.HQUIC) {
 	}
 
 	res := newMsQuicStream(s, conn.ctx)
+	rawConn.(MsQuicConn).streams.Store(s, res)
 	select {
 	case conn.acceptStreamQueue <- res:
-		rawConn.(MsQuicConn).streams.Store(s, res)
 	default:
+		rawConn.(MsQuicConn).streams.Delete(s)
 		cAbortStream(s)
 	}
 }
