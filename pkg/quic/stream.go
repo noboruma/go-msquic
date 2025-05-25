@@ -19,6 +19,8 @@ import "C"
 
 type Stream interface {
 	Read(data []byte) (int, error)
+	ReadFrom(r io.Reader) (int64, error)
+	WriteTo(w io.Writer) (int64, error)
 	Write(data []byte) (int, error)
 	Close() error
 	SetDeadline(ttl time.Time) error
@@ -231,44 +233,20 @@ func (mqs MsQuicStream) peerClose() {
 }
 
 func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
-	state := mqs.state
+	var buffer [32 * 1024]byte
 	n := int64(0)
-	var err error
 	for mqs.ctx.Err() == nil {
-		deadline := state.readDeadline
-		if !state.hasReadData() {
-			ctx := mqs.ctx
-			if !deadline.IsZero() {
-				if time.Now().After(deadline) {
-					return n, os.ErrDeadlineExceeded
-				}
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithDeadline(ctx, deadline)
-				defer cancel()
-			}
-			if !mqs.waitRead(ctx) {
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					return n, os.ErrDeadlineExceeded
-				}
-				return n, io.EOF
-			}
+		bn, err := mqs.Read(buffer[:])
+		if bn != 0 {
+			var nn int
+			nn, err = w.Write(buffer[:bn])
+			n += int64(nn)
 		}
-
-		nn := int64(0)
-		state.readBufferAccess.Lock()
-		nn, err = state.readBuffer.WriteTo(w)
-		state.readBufferAccess.Unlock()
-		n += nn
 		if err != nil {
-			break
+			return n, err
 		}
 	}
-
-	if mqs.ctx.Err() != nil {
-		return n, io.EOF
-	}
-
-	return n, err
+	return n, io.EOF
 }
 
 func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
