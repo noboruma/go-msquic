@@ -62,15 +62,11 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
 
-	state.readBufferAccess.Lock()
+	var buffs [][]byte
 	for _, buffer := range unsafe.Slice(buffers, bufferCount) {
-		state.readBuffer.Write(unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
+		buffs = append(buffs, unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
 	}
-	state.readBufferAccess.Unlock()
-	select {
-	case stream.readSignal <- struct{}{}:
-	default:
-	}
+	state.readBuffer.BatchWrite(buffs)
 }
 
 //export newStreamCallback
