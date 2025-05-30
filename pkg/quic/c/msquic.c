@@ -59,7 +59,7 @@ StreamWrite(
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
-        printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
+        //printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
         free(SendBufferRaw);
 		return -1;
     }

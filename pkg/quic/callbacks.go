@@ -2,6 +2,7 @@
 package quic
 
 import (
+	"sync/atomic"
 	"time"
 	"unsafe"
 )
@@ -9,8 +10,34 @@ import (
 // #include "msquic.h"
 import "C"
 
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12 atomic.Int64
+
+func init() {
+	go func() {
+		for {
+			<-time.After(5 * time.Second)
+			println("newConnectionCa", time1.Swap(0),
+				"closeConnection", time2.Swap(0),
+				"closePeerConnec", time3.Swap(0),
+				"newReadCallback", time4.Swap(0),
+				"newStreamCallba", time5.Swap(0),
+				"closeStreamCall", time6.Swap(0),
+				"startStreamCall", time7.Swap(0),
+				"startConnection", time8.Swap(0),
+				"streamWrite", time9.Swap(0), "\n",
+				"streamRead", time10.Swap(0),
+				"streamReadWait", time11.Swap(0),
+				"streamReadDataArrived", time12.Swap(0))
+		}
+	}()
+}
+
 //export newConnectionCallback
 func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
+	now := time.Now()
+	defer func() {
+		time1.Add(time.Since(now).Milliseconds())
+	}()
 	listener, has := listeners.Load(l)
 	if !has {
 		return // already closed
@@ -27,16 +54,25 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 
 //export closeConnectionCallback
 func closeConnectionCallback(c C.HQUIC) {
+	now := time.Now()
+	defer func() {
+		time2.Add(time.Since(now).Milliseconds())
+	}()
 	res, has := connections.LoadAndDelete(c)
 	if !has {
 		return // already closed
 	}
+
 	res.(MsQuicConn).appClose()
 }
 
 //export closePeerConnectionCallback
 func closePeerConnectionCallback(c C.HQUIC) {
 
+	now := time.Now()
+	defer func() {
+		time3.Add(time.Since(now).Milliseconds())
+	}()
 	res, has := connections.Load(c)
 
 	if !has {
@@ -49,6 +85,10 @@ func closePeerConnectionCallback(c C.HQUIC) {
 //export newReadCallback
 func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_t) {
 
+	now := time.Now()
+	defer func() {
+		time4.Add(time.Since(now).Milliseconds())
+	}()
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
@@ -63,15 +103,15 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
 
-	now := time.Now()
+	//now := time.Now()
 	total := 0
-	state.readBufferAccess.Lock()
+	var batch [][]byte
 	for _, buffer := range unsafe.Slice(buffers, bufferCount) {
-		state.readBuffer.Write(unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
+		batch = append(batch, unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
 		total += int(buffer.Length)
 	}
-	state.readBufferAccess.Unlock()
-	println("write took", time.Since(now).Milliseconds(), "ms", "size:", total)
+	state.readBuffers.Write(batch)
+	//println("write took", time.Since(now).Milliseconds(), "ms", "size:", total)
 	select {
 	case stream.readSignal <- struct{}{}:
 	default:
@@ -80,6 +120,10 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 
 //export newStreamCallback
 func newStreamCallback(c, s C.HQUIC) {
+	now := time.Now()
+	defer func() {
+		time5.Add(time.Since(now).Milliseconds())
+	}()
 	rawConn, has := connections.Load(c)
 	if !has {
 		cAbortStream(s)
@@ -105,6 +149,10 @@ func newStreamCallback(c, s C.HQUIC) {
 //export closeStreamCallback
 func closeStreamCallback(c, s C.HQUIC) {
 
+	now := time.Now()
+	defer func() {
+		time6.Add(time.Since(now).Milliseconds())
+	}()
 	rawConn, has := connections.Load(c)
 	if !has {
 		return // already closed
@@ -124,6 +172,10 @@ func closeStreamCallback(c, s C.HQUIC) {
 //export startStreamCallback
 func startStreamCallback(c, s C.HQUIC) {
 
+	now := time.Now()
+	defer func() {
+		time7.Add(time.Since(now).Milliseconds())
+	}()
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for start stream")
@@ -146,6 +198,10 @@ func startStreamCallback(c, s C.HQUIC) {
 //export startConnectionCallback
 func startConnectionCallback(c C.HQUIC) {
 
+	now := time.Now()
+	defer func() {
+		time8.Add(time.Since(now).Milliseconds())
+	}()
 	res, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for start conn")

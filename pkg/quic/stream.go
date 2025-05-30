@@ -29,8 +29,65 @@ type Stream interface {
 	Context() context.Context
 }
 
-type streamState struct {
+type ChainedBuffers struct {
+	current *ChainedBuffer 
+	tail *ChainedBuffer
+}
+
+func(cbs *ChainedBuffers) HasData() bool {
+	return cbs.current.HasData()
+}
+
+func(cbs *ChainedBuffers) Write(batch [][]byte) {
+	next := ChainedBuffer{}
+	total := 0
+	for _, b := range batch {
+		total += len(b)
+	}
+	next.readBuffer.Grow(total)
+	for _, b := range batch {
+		next.readBuffer.Write(b)
+	}
+	cbs.tail.next.Store(&next)
+	cbs.tail = &next
+}
+
+func(cbs *ChainedBuffers) Read(output []byte) (int, error) {
+	n := 0
+	for {
+		if cbs.current.empty.Load() {
+			next := cbs.current.next.Swap(nil)
+			if next == nil {
+				break
+			}
+			cbs.current = next
+		}
+		nn, _ := cbs.current.readBuffer.Read(output[n:])
+		n += nn
+		if len(output) == n {
+			break
+		}
+		cbs.current.empty.Store(true)
+	}
+	return n, nil
+}
+
+type ChainedBuffer struct {
 	readBuffer       bytes.Buffer
+	next           atomic.Pointer[ChainedBuffer]
+	empty          atomic.Bool
+}
+
+func(cb *ChainedBuffer) HasData() bool {
+	if !cb.empty.Load() {
+		return true
+	}
+	next := cb.next.Load()
+	return next != nil
+}
+
+type streamState struct {
+	readBuffers      ChainedBuffers
 	readDeadline     time.Time
 	writeDeadline    time.Time
 	readBufferAccess sync.Mutex
@@ -40,10 +97,7 @@ type streamState struct {
 }
 
 func (ss *streamState) hasReadData() bool {
-	ss.readBufferAccess.Lock()
-	defer ss.readBufferAccess.Unlock()
-
-	return ss.readBuffer.Len() != 0
+	return ss.readBuffers.HasData()
 }
 
 type MsQuicStream struct {
@@ -62,7 +116,7 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		ctx:    ctx,
 		cancel: cancel,
 		state: &streamState{
-			readBuffer:    *bytes.NewBuffer(make([]byte, 0, 8*1024)),
+			readBuffers:   ChainedBuffers{},
 			readDeadline:  time.Time{},
 			writeDeadline: time.Time{},
 			shutdown:      atomic.Bool{},
@@ -71,6 +125,8 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		readSignal: make(chan struct{}, 1),
 		peerSignal: make(chan struct{}, 1),
 	}
+	res.state.readBuffers.current = &ChainedBuffer{}
+	res.state.readBuffers.tail = res.state.readBuffers.current
 	return res
 }
 
@@ -84,9 +140,14 @@ func (mqs MsQuicStream) waitStart() bool {
 }
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
+	now := time.Now()
+	defer func() {
+		time10.Add(time.Since(now).Milliseconds())
+	}()
 	state := mqs.state
 	if !state.hasReadData() {
 		if mqs.ctx.Err() != nil {
+			time11.Add(time.Since(now).Milliseconds())
 			return 0, io.EOF
 		}
 
@@ -94,6 +155,7 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 		ctx := mqs.ctx
 		if !deadline.IsZero() {
 			if time.Now().After(deadline) {
+				time11.Add(time.Since(now).Milliseconds())
 				return 0, os.ErrDeadlineExceeded
 			}
 			var cancel context.CancelFunc
@@ -101,21 +163,16 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			defer cancel()
 		}
 		if !mqs.waitRead(ctx) {
+			time11.Add(time.Since(now).Milliseconds())
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return 0, os.ErrDeadlineExceeded
 			}
 			return 0, io.EOF
 		}
+		time12.Add(time.Since(now).Milliseconds())
 	}
 
-	state.readBufferAccess.Lock()
-	defer state.readBufferAccess.Unlock()
-	n, err := state.readBuffer.Read(data)
-	if n == 0 { // ignore io.EOF
-		return 0, nil
-	}
-
-	return n, err
+	return state.readBuffers.Read(data)
 }
 
 func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
@@ -128,6 +185,10 @@ func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 }
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
+	now := time.Now()
+	defer func() {
+		time9.Add(time.Since(now).Milliseconds())
+	}()
 	state := mqs.state
 	state.writeAccess.Lock()
 	defer state.writeAccess.Unlock()
