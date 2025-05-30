@@ -2,6 +2,7 @@
 package quic
 
 import (
+	"time"
 	"unsafe"
 )
 
@@ -62,11 +63,15 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
 
+	now := time.Now()
+	total := 0
 	state.readBufferAccess.Lock()
 	for _, buffer := range unsafe.Slice(buffers, bufferCount) {
 		state.readBuffer.Write(unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
+		total += int(buffer.Length)
 	}
 	state.readBufferAccess.Unlock()
+	println("write took", time.Since(now).Milliseconds(), "ms", "size:", total)
 	select {
 	case stream.readSignal <- struct{}{}:
 	default:

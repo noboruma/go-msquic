@@ -30,24 +30,25 @@ type Stream interface {
 }
 
 type streamState struct {
-	shutdown         atomic.Bool
-	readBufferAccess sync.Mutex
 	readBuffer       bytes.Buffer
 	readDeadline     time.Time
 	writeDeadline    time.Time
+	readBufferAccess sync.Mutex
 	writeAccess      sync.Mutex
 	startSignal      chan struct{}
+	shutdown         atomic.Bool
 }
 
 func (ss *streamState) hasReadData() bool {
 	ss.readBufferAccess.Lock()
 	defer ss.readBufferAccess.Unlock()
+
 	return ss.readBuffer.Len() != 0
 }
 
 type MsQuicStream struct {
-	stream     C.HQUIC
 	ctx        context.Context
+	stream     C.HQUIC
 	cancel     context.CancelFunc
 	state      *streamState
 	readSignal chan struct{}
@@ -61,7 +62,7 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		ctx:    ctx,
 		cancel: cancel,
 		state: &streamState{
-			readBuffer:    bytes.Buffer{},
+			readBuffer:    *bytes.NewBuffer(make([]byte, 0, 8*1024)),
 			readDeadline:  time.Time{},
 			writeDeadline: time.Time{},
 			shutdown:      atomic.Bool{},
@@ -84,12 +85,12 @@ func (mqs MsQuicStream) waitStart() bool {
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
 	state := mqs.state
-	if mqs.ctx.Err() != nil {
-		return 0, io.EOF
-	}
-
-	deadline := state.readDeadline
 	if !state.hasReadData() {
+		if mqs.ctx.Err() != nil {
+			return 0, io.EOF
+		}
+
+		deadline := state.readDeadline
 		ctx := mqs.ctx
 		if !deadline.IsZero() {
 			if time.Now().After(deadline) {
@@ -156,7 +157,9 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	runtime.KeepAlive(data)
 	if ctx.Err() != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+
 			return int(offset), os.ErrDeadlineExceeded
+
 		}
 		return int(offset), io.ErrUnexpectedEOF
 	}
@@ -204,12 +207,13 @@ func (mqs MsQuicStream) shutdownClose() error {
 	mqs.state.writeAccess.Lock()
 	defer mqs.state.writeAccess.Unlock()
 	if !mqs.state.shutdown.Swap(true) {
-		cShutdownStream(mqs.stream)
-		select {
-		case <-mqs.peerSignal:
-		case <-time.After(3 * time.Second):
-			cAbortStream(mqs.stream)
-		}
+		cAbortStream(mqs.stream)
+		//cShutdownStream(mqs.stream)
+		//select {
+		//case <-mqs.peerSignal:
+		//case <-time.After(3 * time.Second):
+		//	cAbortStream(mqs.stream)
+		//}
 	}
 	return nil
 }

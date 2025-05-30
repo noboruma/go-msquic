@@ -213,6 +213,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	}
 	res := newMsQuicConn(conn, cfg.FailOnOpenStream)
 	_, load := connections.LoadOrStore(conn, res)
+
 	if load {
 		println("PANIC already registered connection")
 	}

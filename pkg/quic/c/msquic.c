@@ -415,8 +415,10 @@ LoadDialConfiguration(struct QUICConfig cfg)
     Settings.IsSet.IdleTimeoutMs = TRUE;
     Settings.PeerBidiStreamCount = cfg.MaxBidiStreams;
     Settings.IsSet.PeerBidiStreamCount = TRUE;
-	Settings.KeepAliveIntervalMs = cfg.KeepAliveMs;
-	Settings.IsSet.KeepAliveIntervalMs = TRUE;
+	if (cfg.KeepAliveMs != 0)  {
+		Settings.KeepAliveIntervalMs = cfg.KeepAliveMs;
+		Settings.IsSet.KeepAliveIntervalMs = TRUE;
+	}
 
 	if (cfg.EnableDatagramReceive != 0) {
 		Settings.DatagramReceiveEnabled = TRUE;

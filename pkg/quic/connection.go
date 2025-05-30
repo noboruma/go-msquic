@@ -40,17 +40,17 @@ type Config struct {
 }
 
 type MsQuicConn struct {
+	remoteAddr        net.UDPAddr
+	ctx               context.Context
 	conn              C.HQUIC
 	config            C.HQUIC
 	acceptStreamQueue chan MsQuicStream
-	ctx               context.Context
 	cancel            context.CancelFunc
-	remoteAddr        net.UDPAddr
 	shutdown          *atomic.Bool
 	streams           *sync.Map //map[C.HQUIC]MsQuicStream
-	failOpenStream    bool
 	openStream        *sync.RWMutex
 	startSignal       chan struct{}
+	failOpenStream    bool
 }
 
 func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
