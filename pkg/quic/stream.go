@@ -30,15 +30,15 @@ type Stream interface {
 }
 
 type ChainedBuffers struct {
-	current *ChainedBuffer 
-	tail *ChainedBuffer
+	current *ChainedBuffer
+	tail    *ChainedBuffer
 }
 
-func(cbs *ChainedBuffers) HasData() bool {
+func (cbs *ChainedBuffers) HasData() bool {
 	return cbs.current.HasData()
 }
 
-func(cbs *ChainedBuffers) Write(batch [][]byte) {
+func (cbs *ChainedBuffers) Write(batch [][]byte) {
 	next := ChainedBuffer{}
 	total := 0
 	for _, b := range batch {
@@ -52,7 +52,7 @@ func(cbs *ChainedBuffers) Write(batch [][]byte) {
 	cbs.tail = &next
 }
 
-func(cbs *ChainedBuffers) Read(output []byte) (int, error) {
+func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 	n := 0
 	for {
 		if cbs.current.empty.Load() {
@@ -73,12 +73,12 @@ func(cbs *ChainedBuffers) Read(output []byte) (int, error) {
 }
 
 type ChainedBuffer struct {
-	readBuffer       bytes.Buffer
-	next           atomic.Pointer[ChainedBuffer]
-	empty          atomic.Bool
+	readBuffer bytes.Buffer
+	next       atomic.Pointer[ChainedBuffer]
+	empty      atomic.Bool
 }
 
-func(cb *ChainedBuffer) HasData() bool {
+func (cb *ChainedBuffer) HasData() bool {
 	if !cb.empty.Load() {
 		return true
 	}
@@ -87,13 +87,12 @@ func(cb *ChainedBuffer) HasData() bool {
 }
 
 type streamState struct {
-	readBuffers      ChainedBuffers
-	readDeadline     time.Time
-	writeDeadline    time.Time
-	readBufferAccess sync.Mutex
-	writeAccess      sync.Mutex
-	startSignal      chan struct{}
-	shutdown         atomic.Bool
+	readBuffers   ChainedBuffers
+	readDeadline  time.Time
+	writeDeadline time.Time
+	writeAccess   sync.Mutex
+	startSignal   chan struct{}
+	shutdown      atomic.Bool
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -201,29 +200,12 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		if time.Now().After(deadline) {
 			return 0, os.ErrDeadlineExceeded
 		}
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, deadline)
-		defer cancel()
 	}
-	offset := 0
-	size := len(data)
-	for offset != len(data) && ctx.Err() == nil {
-		n := cStreamWrite(mqs.stream, (*C.uint8_t)(unsafe.SliceData(data[offset:])), C.int64_t(size))
-		if n == -1 {
-			return int(offset), fmt.Errorf("write stream error %v/%v", offset, size)
-		}
-		offset += int(n)
-		size -= int(n)
+	n := cStreamWrite(mqs.stream, (*C.uint8_t)(unsafe.SliceData(data[:])), C.int64_t(len(data)))
+	if n == -1 {
+		return 0, fmt.Errorf("write stream error %v", len(data))
 	}
 	runtime.KeepAlive(data)
-	if ctx.Err() != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-
-			return int(offset), os.ErrDeadlineExceeded
-
-		}
-		return int(offset), io.ErrUnexpectedEOF
-	}
 	return len(data), nil
 }
 
@@ -268,13 +250,13 @@ func (mqs MsQuicStream) shutdownClose() error {
 	mqs.state.writeAccess.Lock()
 	defer mqs.state.writeAccess.Unlock()
 	if !mqs.state.shutdown.Swap(true) {
-		cAbortStream(mqs.stream)
-		//cShutdownStream(mqs.stream)
-		//select {
-		//case <-mqs.peerSignal:
-		//case <-time.After(3 * time.Second):
-		//	cAbortStream(mqs.stream)
-		//}
+		//cAbortStream(mqs.stream)
+		cShutdownStream(mqs.stream)
+		select {
+		case <-mqs.peerSignal:
+		case <-time.After(3 * time.Second):
+			cAbortStream(mqs.stream)
+		}
 	}
 	return nil
 }

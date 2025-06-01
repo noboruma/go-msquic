@@ -15,7 +15,7 @@ var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time1
 func init() {
 	go func() {
 		for {
-			<-time.After(5 * time.Second)
+			<-time.After(15 * time.Second)
 			println("newConnectionCa", time1.Swap(0),
 				"closeConnection", time2.Swap(0),
 				"closePeerConnec", time3.Swap(0),

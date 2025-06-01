@@ -61,6 +61,7 @@ StreamWrite(
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
         //printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
         free(SendBufferRaw);
+        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 		return -1;
     }
 	return len;
@@ -181,6 +182,7 @@ StartStream(
 	enum QUIC_STREAM_START_FLAGS flag = QUIC_STREAM_START_FLAG_NONE;
 	if (FailOpen == 1) {
 		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
+		flag |= QUIC_STREAM_START_FLAG_IMMEDIATE;
 	}
 	flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 

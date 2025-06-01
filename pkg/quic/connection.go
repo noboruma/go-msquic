@@ -86,15 +86,24 @@ func (mqc MsQuicConn) Close() error {
 	mqc.openStream.Lock()
 	defer mqc.openStream.Unlock()
 	if !mqc.shutdown.Swap(true) {
+
+		closed := 0
 		mqc.streams.Range(func(k, v any) bool {
-			println("PANIC1")
 			go v.(MsQuicStream).shutdownClose()
+			closed += 1
 			return true
 		})
+		if closed != 0 {
+			println("PANIC1:", closed)
+		}
 		close(mqc.acceptStreamQueue)
+		closed = 0
 		for s := range mqc.acceptStreamQueue {
-			println("PANIC12")
 			go s.shutdownClose()
+			closed += 1
+		}
+		if closed != 0 {
+			println("PANIC2:", closed)
 		}
 		cShutdownConnection(mqc.conn)
 	}
@@ -111,15 +120,24 @@ func (mqc MsQuicConn) appClose() error {
 	mqc.openStream.Lock()
 	defer mqc.openStream.Unlock()
 	if !mqc.shutdown.Swap(true) {
+		closed := 0
 		mqc.streams.Range(func(k, v any) bool {
-			println("PANIC2")
 			v.(MsQuicStream).abortClose()
+			closed += 1
 			return true
 		})
+		if closed != 0 {
+			println("PANIC3:", closed)
+		}
 		close(mqc.acceptStreamQueue)
+		closed = 0
 		for s := range mqc.acceptStreamQueue {
 			println("PANIC3")
+			closed += 1
 			s.abortClose()
+		}
+		if closed != 0 {
+			println("PANIC4:", closed)
 		}
 	}
 	return nil
