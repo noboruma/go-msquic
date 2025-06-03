@@ -134,6 +134,7 @@ func (mqs MsQuicStream) waitStart() bool {
 	case <-mqs.state.startSignal:
 		return true
 	case <-mqs.Context().Done():
+	case <-time.After(5 * time.Second):
 	}
 	return false
 }
@@ -233,46 +234,54 @@ func (mqs MsQuicStream) Context() context.Context {
 // Close is a definitive operation
 // The stream cannot be receive anything after that call
 func (mqs MsQuicStream) Close() error {
-	return mqs.shutdownClose()
-}
-
-func (mqs MsQuicStream) appClose() error {
-	mqs.peerClose()
-	mqs.cancel()
 	mqs.state.writeAccess.Lock()
 	defer mqs.state.writeAccess.Unlock()
-	mqs.state.shutdown.Store(true)
-	return nil
+	return mqs.abortClose()
 }
 
-func (mqs MsQuicStream) shutdownClose() error {
-	mqs.cancel()
-	mqs.state.writeAccess.Lock()
-	defer mqs.state.writeAccess.Unlock()
+func (mqs MsQuicStream) peerClose() error {
 	if !mqs.state.shutdown.Swap(true) {
-		//cAbortStream(mqs.stream)
-		cShutdownStream(mqs.stream)
-		select {
-		case <-mqs.peerSignal:
-		case <-time.After(3 * time.Second):
-			cAbortStream(mqs.stream)
-		}
+		mqs.peerCloseACK()
+		mqs.cancel()
 	}
 	return nil
 }
 
-func (mqs MsQuicStream) abortClose() error {
-	mqs.peerClose()
+func (mqs MsQuicStream) appClose() error {
+	mqs.state.shutdown.Store(true)
+	mqs.peerCloseACK()
 	mqs.cancel()
 	mqs.state.writeAccess.Lock()
 	defer mqs.state.writeAccess.Unlock()
+	return nil
+}
+
+//func (mqs MsQuicStream) shutdownClose() error {
+//	mqs.cancel()
+//	mqs.state.writeAccess.Lock()
+//	defer mqs.state.writeAccess.Unlock()
+//	if !mqs.state.shutdown.Swap(true) {
+//		//cAbortStream(mqs.stream)
+//		cShutdownStream(mqs.stream)
+//		select {
+//		case <-mqs.peerSignal:
+//		case <-time.After(3 * time.Second):
+//			cAbortStream(mqs.stream)
+//		}
+//	}
+//	return nil
+//}
+
+func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
+		mqs.peerClose()
+		mqs.cancel()
 		cAbortStream(mqs.stream)
 	}
 	return nil
 }
 
-func (mqs MsQuicStream) peerClose() {
+func (mqs MsQuicStream) peerCloseACK() {
 	select {
 	case mqs.peerSignal <- struct{}{}:
 	default:

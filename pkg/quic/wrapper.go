@@ -39,6 +39,7 @@ import "C"
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -228,9 +229,9 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		Alpn:                          buffer,
 		EnableDatagramReceive:         enableDatagram,
 	})
-	select {
-	case <-res.startSignal:
-	case <-ctx.Done():
+
+	if !res.waitStart(ctx) {
+		return res, errors.New("failed to start")
 	}
 	return res, nil
 }

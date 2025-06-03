@@ -17,6 +17,7 @@ extern void newStreamCallback(HQUIC, HQUIC);
 extern void newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
+extern void closePeerStreamCallback(HQUIC,HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
@@ -79,7 +80,13 @@ StreamCallback(
 {
     switch (Event->Type) {
 	case QUIC_STREAM_EVENT_START_COMPLETE:
-		startStreamCallback(Context, Stream);
+		QUIC_STATUS Status;
+		if (QUIC_FAILED(Status = Event->START_COMPLETE.Status)) {
+			closePeerStreamCallback(Context, Stream);
+			MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+		} else {
+			startStreamCallback(Context, Stream);
+		}
 		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		if  (Event->SEND_COMPLETE.ClientContext) {
@@ -106,7 +113,7 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
-		closeStreamCallback(Context, Stream);
+		closePeerStreamCallback(Context, Stream);
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
         break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
@@ -183,12 +190,15 @@ StartStream(
 	if (FailOpen == 1) {
 		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
 		flag |= QUIC_STREAM_START_FLAG_IMMEDIATE;
+		flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 	}
-	flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
+		if (FailOpen == 0) {
+			MsQuic->StreamClose(Stream);
+		}
 		return -1;
     }
 	return 0;
@@ -243,8 +253,8 @@ ConnectionCallback(
 		if (LOGS_ENABLED) {
 				printf("[strm][%p] Peer started\n", Event->PEER_STREAM_STARTED.Stream);
 		}
-        MsQuic->SetCallbackHandler(Event->PEER_STREAM_STARTED.Stream, (void*)StreamCallback, Connection);
 		newStreamCallback(Connection, Event->PEER_STREAM_STARTED.Stream);
+        MsQuic->SetCallbackHandler(Event->PEER_STREAM_STARTED.Stream, (void*)StreamCallback, Connection);
         break;
     case QUIC_CONNECTION_EVENT_RESUMED:
 		if (LOGS_ENABLED) {
@@ -270,14 +280,13 @@ ListenerCallback(
     QUIC_STATUS Status = QUIC_STATUS_NOT_SUPPORTED;
     switch (Event->Type) {
     case QUIC_LISTENER_EVENT_NEW_CONNECTION:
-        Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, (HQUIC)Context);
 		if (LOGS_ENABLED) {
 			printf("[conn][%p] new connection\n", Event->NEW_CONNECTION.Connection);
 		}
-		if (QUIC_SUCCEEDED(Status)) {
-			MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
-			newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
-		} else {
+		newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
+		MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback, Context);
+		Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, (HQUIC)Context);
+		if (QUIC_FAILED(Status)) {
 			printf("[conn][%p] new connection failed\n", Event->NEW_CONNECTION.Connection);
 			MsQuic->ConnectionShutdown(Event->NEW_CONNECTION.Connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
 		}
