@@ -134,7 +134,6 @@ func (mqs MsQuicStream) waitStart() bool {
 	case <-mqs.state.startSignal:
 		return true
 	case <-mqs.Context().Done():
-	case <-time.After(5 * time.Second):
 	}
 	return false
 }
