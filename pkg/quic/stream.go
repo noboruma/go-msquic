@@ -14,7 +14,7 @@ import (
 	"unsafe"
 )
 
-// #include "msquic.h"
+// #include "inc/msquic.h"
 import "C"
 
 type Stream interface {

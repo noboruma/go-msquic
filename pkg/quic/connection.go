@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// #include "msquic.h"
+// #include "inc/msquic.h"
 import "C"
 
 const streamAcceptQueueSize = 100

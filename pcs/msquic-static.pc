@@ -1,6 +1,6 @@
 prefix=/workspace/msquic
 libdir=${prefix}/build-static/bin/Release
-includedir=${prefix}/src/inc
+includedir=${prefix}/src
 
 Name: MSQuic-libmsquic
 Version: 1.0.0
