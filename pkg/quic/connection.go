@@ -51,9 +51,10 @@ type MsQuicConn struct {
 	openStream        *sync.RWMutex
 	startSignal       chan struct{}
 	failOpenStream    bool
+	noAlloc           bool
 }
 
-func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
+func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc bool) MsQuicConn {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ip, port := getRemoteAddr(c)
@@ -69,15 +70,19 @@ func newMsQuicConn(c C.HQUIC, failOnOpen bool) MsQuicConn {
 		failOpenStream:    failOnOpen,
 		openStream:        new(sync.RWMutex),
 		startSignal:       make(chan struct{}, 1),
+		noAlloc:           noAlloc,
 	}
 }
 
 func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 	select {
 	case <-mqc.startSignal:
+		println("1")
 		return true
 	case <-mqc.ctx.Done():
+		println("2")
 	case <-ctx.Done():
+		println("3")
 	}
 	return false
 }
@@ -123,7 +128,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
-	res := newMsQuicStream(stream, mqc.ctx)
+	res := newMsQuicStream(stream, mqc.ctx, mqc.noAlloc)
 	_, loaded := mqc.streams.LoadOrStore(stream, res)
 	if loaded {
 		println("PANIC")

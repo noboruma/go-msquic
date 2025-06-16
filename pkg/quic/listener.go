@@ -17,9 +17,10 @@ type MsQuicListener struct {
 	key, cert, alpn  *C.char
 	shutdown         *atomic.Bool
 	failOnOpenStream bool
+	noAllocStream    bool
 }
 
-func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failOnOpenStream bool) MsQuicListener {
+func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failOnOpenStream, noAlloc bool) MsQuicListener {
 	return MsQuicListener{
 		listener:         c,
 		acceptQueue:      make(chan MsQuicConn, 1_000),
@@ -29,6 +30,7 @@ func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failO
 		config:           config,
 		shutdown:         new(atomic.Bool),
 		failOnOpenStream: failOnOpenStream,
+		noAllocStream:    noAlloc,
 	}
 }
 
