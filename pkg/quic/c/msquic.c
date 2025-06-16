@@ -22,6 +22,7 @@ extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
+extern void freeBuffer(uint8_t *);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -45,23 +46,35 @@ int64_t
 StreamWrite(
     _In_ HQUIC Stream,
 	_In_ uint8_t *array,
-	_In_ int64_t len
+	_In_ int64_t len,
+	_In_ uint8_t noAlloc
+
     )
 {
-    char* SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
-    if (SendBufferRaw == NULL) {
-        printf("SendBuffer allocation failed!\n");
-        return -1;
-    }
-	memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, len);
-    QUIC_BUFFER* SendBuffer = (QUIC_BUFFER*)SendBufferRaw;
-    SendBuffer->Buffer = (uint8_t*)SendBufferRaw + sizeof(QUIC_BUFFER);
-    SendBuffer->Length = len;
+	QUIC_BUFFER* SendBuffer = NULL;
+	char* SendBufferRaw = NULL;
+	if (noAlloc != 1) {
+		SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
+		if (SendBufferRaw == NULL) {
+			printf("SendBuffer allocation failed!\n");
+			return -1;
+		}
+		SendBuffer = (QUIC_BUFFER*)SendBufferRaw;
+		memcpy(SendBufferRaw+sizeof(QUIC_BUFFER), array, len);
+		SendBuffer->Buffer = (uint8_t*)SendBufferRaw + sizeof(QUIC_BUFFER);
+		SendBuffer->Length = len;
+	} else {
+		SendBuffer = malloc(sizeof(QUIC_BUFFER));
+		SendBuffer->Buffer = array;
+		SendBuffer->Length = len;
+	}
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
         //printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
-        free(SendBufferRaw);
+		if (noAlloc != 1) {
+			free(SendBufferRaw);
+		}
         MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 		return -1;
     }
@@ -90,6 +103,7 @@ StreamCallback(
 		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		if  (Event->SEND_COMPLETE.ClientContext) {
+			freeBuffer(((QUIC_BUFFER*)Event->SEND_COMPLETE.ClientContext)->Buffer);
 			free(Event->SEND_COMPLETE.ClientContext);
 		}
 		if (LOGS_ENABLED) {
@@ -492,6 +506,7 @@ StartConnection(
 
     HQUIC configuration = LoadDialConfiguration(cfg);
 	if (!configuration) {
+        printf("Connection Load dial error!\n");
         return;
     }
 

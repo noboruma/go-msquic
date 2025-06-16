@@ -39,7 +39,6 @@ import "C"
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -157,7 +156,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream, cfg.DisableSendBuffering)
 	listeners.Store(listener, res)
 
 	status := C.StartListener(listener, cAddr, C.uint16_t(portInt), buffer)
@@ -208,11 +207,15 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	if cfg.EnableDatagramReceive {
 		enableDatagram = C.int(1)
 	}
+	disableBuffering := C.int(0)
+	if cfg.DisableSendBuffering {
+		disableBuffering = C.int(1)
+	}
 	conn := C.OpenConnection()
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicConn(conn, cfg.FailOnOpenStream)
+	res := newMsQuicConn(conn, cfg.FailOnOpenStream, cfg.DisableSendBuffering)
 	_, load := connections.LoadOrStore(conn, res)
 
 	if load {
@@ -228,10 +231,11 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		MaxStatelessOperations:        0,
 		Alpn:                          buffer,
 		EnableDatagramReceive:         enableDatagram,
+		DisableSendBuffering:          disableBuffering,
 	})
 
 	if !res.waitStart(ctx) {
-		return res, errors.New("failed to start")
+		return res, fmt.Errorf("failed to start: %v", ctx.Err())
 	}
 	return res, nil
 }
@@ -249,8 +253,8 @@ func cAbortStream(s C.HQUIC) {
 	C.AbortStream(s)
 }
 
-func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t) C.int64_t {
-	return C.StreamWrite(s, cArray, size)
+func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_t) C.int64_t {
+	return C.StreamWrite(s, cArray, size, noAlloc)
 }
 
 func cCreateStream(c C.HQUIC) C.HQUIC {

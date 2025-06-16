@@ -106,9 +106,10 @@ type MsQuicStream struct {
 	state      *streamState
 	readSignal chan struct{}
 	peerSignal chan struct{}
+	noAlloc    bool
 }
 
-func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
+func newMsQuicStream(s C.HQUIC, connCtx context.Context, noAlloc bool) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
 	res := MsQuicStream{
 		stream: s,
@@ -123,6 +124,7 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context) MsQuicStream {
 		},
 		readSignal: make(chan struct{}, 1),
 		peerSignal: make(chan struct{}, 1),
+		noAlloc:    noAlloc,
 	}
 	res.state.readBuffers.current = &ChainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
@@ -183,6 +185,10 @@ func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 	}
 }
 
+var sendBuffers sync.Map //map[uintptr][]byte
+var sendBuffersSize atomic.Int64
+var sendBuffersCount atomic.Int64
+
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	now := time.Now()
 	defer func() {
@@ -201,7 +207,18 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 			return 0, os.ErrDeadlineExceeded
 		}
 	}
-	n := cStreamWrite(mqs.stream, (*C.uint8_t)(unsafe.SliceData(data[:])), C.int64_t(len(data)))
+	cNoAlloc := C.uint8_t(0)
+	if mqs.noAlloc {
+		cNoAlloc = C.uint8_t(1)
+		idx := (uintptr)(unsafe.Pointer(unsafe.SliceData(data)))
+		sendBuffers.Store(idx, data)
+		sendBuffersSize.Add(1)
+		sendBuffersCount.Add(1)
+	}
+	n := cStreamWrite(mqs.stream,
+		(*C.uint8_t)(unsafe.SliceData(data[:])),
+		C.int64_t(len(data)),
+		cNoAlloc)
 	if n == -1 {
 		return 0, fmt.Errorf("write stream error %v", len(data))
 	}
@@ -305,8 +322,38 @@ func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
 }
 
 func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
+	if mqs.noAlloc {
+		return mqs.dynaReadFrom(r)
+	} else {
+		return mqs.staticReadFrom(r)
+	}
+}
+
+func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 	var buffer [32 * 1024]byte
 	for mqs.ctx.Err() == nil {
+		bn, err := r.Read(buffer[:])
+		if bn != 0 {
+			var nn int
+			nn, err = mqs.Write(buffer[:bn])
+			n += int64(nn)
+		}
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, io.EOF
+}
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, 32*1024)
+	},
+}
+
+func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
+	for mqs.ctx.Err() == nil {
+		buffer := bufferPool.Get().([]byte)
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
 			var nn int

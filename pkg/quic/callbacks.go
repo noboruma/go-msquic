@@ -28,7 +28,9 @@ func init() {
 				"streamRead", time10.Swap(0),
 				"streamReadWait", time11.Swap(0),
 				"streamReadDataArrived", time12.Swap(0),
-				"finalStream", time13.Swap(0))
+				"finalStream", time13.Swap(0), "\n",
+				"buffersSize", sendBuffersSize.Load(),
+				"buffersCount", sendBuffersCount.Swap(0))
 		}
 	}()
 }
@@ -43,7 +45,9 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	if !has {
 		return // already closed
 	}
-	res := newMsQuicConn(c, listener.(MsQuicListener).failOnOpenStream)
+	res := newMsQuicConn(c,
+		listener.(MsQuicListener).failOnOpenStream,
+		listener.(MsQuicListener).noAllocStream)
 
 	select {
 	case listener.(MsQuicListener).acceptQueue <- res:
@@ -138,7 +142,7 @@ func newStreamCallback(c, s C.HQUIC) {
 		return
 	}
 
-	res := newMsQuicStream(s, conn.ctx)
+	res := newMsQuicStream(s, conn.ctx, conn.noAlloc)
 	select {
 	case conn.acceptStreamQueue <- res:
 		rawConn.(MsQuicConn).streams.Store(s, res)
@@ -243,5 +247,16 @@ func startConnectionCallback(c C.HQUIC) {
 	select {
 	case res.(MsQuicConn).startSignal <- struct{}{}:
 	default:
+	}
+}
+
+//export freeBuffer
+func freeBuffer(buffer *C.uint8_t) {
+	idx := uintptr(unsafe.Pointer(buffer))
+	sBuffer, has := sendBuffers.Load(idx)
+	if has {
+		bufferPool.Put(sBuffer)
+		sendBuffers.Delete(idx)
+		sendBuffersSize.Add(-1)
 	}
 }
