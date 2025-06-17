@@ -35,8 +35,9 @@ type Config struct {
 	TracePerfCountReport          time.Duration
 	FailOnOpenStream              bool
 	EnableDatagramReceive         bool
-	DisableSendBuffering          bool
+	DisableSendBuffering          bool // Do not allocate & copy sent buffers
 	MaxBytesPerKey                int64
+	EnableAppBuffering            bool // This flags is global across all listeners & dialers
 }
 
 type MsQuicConn struct {
@@ -52,9 +53,11 @@ type MsQuicConn struct {
 	startSignal       chan struct{}
 	failOpenStream    bool
 	noAlloc           bool
+	useAppBuffers     bool // Receive side only
 }
 
-func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc bool) MsQuicConn {
+func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicConn {
+
 	ctx, cancel := context.WithCancel(context.Background())
 
 	ip, port := getRemoteAddr(c)
@@ -71,18 +74,16 @@ func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc bool) MsQuicConn {
 		openStream:        new(sync.RWMutex),
 		startSignal:       make(chan struct{}, 1),
 		noAlloc:           noAlloc,
+		useAppBuffers:     useAppBuffers,
 	}
 }
 
 func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 	select {
 	case <-mqc.startSignal:
-		println("1")
 		return true
 	case <-mqc.ctx.Done():
-		println("2")
 	case <-ctx.Done():
-		println("3")
 	}
 	return false
 }
@@ -123,23 +124,36 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("closed connection")
 	}
-	stream := cCreateStream(mqc.conn)
+	useAppBuffers := C.int8_t(0)
+	if mqc.useAppBuffers {
+		useAppBuffers = C.int8_t(1)
+	}
+	stream := cCreateStream(mqc.conn, useAppBuffers)
 	if stream == nil {
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
-	res := newMsQuicStream(stream, mqc.ctx, mqc.noAlloc)
+	res := newMsQuicStream(stream, mqc.ctx, mqc.noAlloc, mqc.useAppBuffers)
 	_, loaded := mqc.streams.LoadOrStore(stream, res)
 	if loaded {
 		println("PANIC")
 	}
-	var enable C.int8_t
+	enable := C.int8_t(0)
 	if mqc.failOpenStream {
 		enable = C.int8_t(1)
-	} else {
-		enable = C.int8_t(0)
 	}
-	if cStartStream(stream, enable) == -1 {
+
+	if mqc.useAppBuffers {
+		for range initBufs {
+			initBuf := provideAppBuffer(res)
+			if cAttachAppBuffer(stream, initBuf) == -1 {
+				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
+			}
+			res.state.recvTotal.Add(uint32(initBuf.Length))
+		}
+	}
+
+	if cStartStream(stream, enable, useAppBuffers) == -1 {
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
