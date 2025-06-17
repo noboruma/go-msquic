@@ -1,12 +1,12 @@
 package quic
 
 /*
+
 #cgo pkg-config: msquic
 #cgo noescape ShutdownConnection
 #cgo noescape ShutdownStream
 #cgo noescape AbortStream
 #cgo noescape CreateStream
-#cgo noescape StartStream
 #cgo noescape LoadListenConfiguration
 #cgo noescape CreateListener
 #cgo noescape StartListener
@@ -15,13 +15,11 @@ package quic
 #cgo noescape StartConnection
 #cgo noescape MsQuicSetup
 #cgo noescape GetRemoteAddr
-#cgo noescape StreamWrite
 
 #cgo nocallback ShutdownConnection
 #cgo nocallback ShutdownStream
 #cgo nocallback AbortStream
 #cgo nocallback CreateStream
-#cgo nocallback StartStream
 #cgo nocallback LoadListenConfiguration
 #cgo nocallback CreateListener
 #cgo nocallback StartListener
@@ -31,6 +29,7 @@ package quic
 #cgo nocallback MsQuicSetup
 #cgo nocallback GetRemoteAddr
 #cgo nocallback StreamWrite
+#cgo nocallback AttachAppBuffer
 
 #include "c/msquic.c"
 */
@@ -97,6 +96,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if err != nil {
 		return MsQuicListener{}, err
 	}
+
 	portInt, _ := strconv.Atoi(port)
 
 	if cfg.KeyFile == "" {
@@ -133,10 +133,11 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		disableSendBuffering = C.int(1)
 	}
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
-		DisableCertificateValidation:  1,
-		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
-		IdleTimeoutMs:                 C.int(cfg.MaxIdleTimeout.Milliseconds()),
-		keyFile:                       cKeyFile,
+		DisableCertificateValidation: 1,
+		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
+		IdleTimeoutMs:                C.int(cfg.MaxIdleTimeout.Milliseconds()),
+		keyFile:                      cKeyFile,
+
 		certFile:                      cCertFile,
 		KeepAliveMs:                   C.int(keepAliveMs),
 		Alpn:                          buffer,
@@ -148,6 +149,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	})
 
 	if config == nil {
+
 		return MsQuicListener{}, fmt.Errorf("failed to create config")
 
 	}
@@ -156,7 +158,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream, cfg.DisableSendBuffering)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
 	listeners.Store(listener, res)
 
 	status := C.StartListener(listener, cAddr, C.uint16_t(portInt), buffer)
@@ -215,7 +217,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicConn(conn, cfg.FailOnOpenStream, cfg.DisableSendBuffering)
+	res := newMsQuicConn(conn, cfg.FailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
 	_, load := connections.LoadOrStore(conn, res)
 
 	if load {
@@ -257,12 +259,12 @@ func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_
 	return C.StreamWrite(s, cArray, size, noAlloc)
 }
 
-func cCreateStream(c C.HQUIC) C.HQUIC {
-	return C.CreateStream(c)
+func cCreateStream(c C.HQUIC, useAppBuffers C.int8_t) C.HQUIC {
+	return C.CreateStream(c, useAppBuffers)
 }
 
-func cStartStream(s C.HQUIC, fail C.int8_t) int64 {
-	return int64(C.StartStream(s, fail))
+func cStartStream(s C.HQUIC, fail, useAppBuffers C.int8_t) int64 {
+	return int64(C.StartStream(s, fail, useAppBuffers))
 }
 
 func cShutdownConnection(c C.HQUIC) {
@@ -271,6 +273,10 @@ func cShutdownConnection(c C.HQUIC) {
 
 func cAbortConnection(c C.HQUIC) {
 	C.AbortConnection(c)
+}
+
+func cAttachAppBuffer(s C.HQUIC, buffer *C.QUIC_BUFFER) C.int32_t {
+	return C.AttachAppBuffer(s, buffer)
 }
 
 func cGetPerfCounters() []uint64 {

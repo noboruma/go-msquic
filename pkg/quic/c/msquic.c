@@ -1,3 +1,5 @@
+#include <stdint.h>
+#define QUIC_API_ENABLE_PREVIEW_FEATURES 1
 #include "inc/msquic.h"
 #include <stdlib.h>
 
@@ -14,7 +16,7 @@
 // Go bindings
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
-extern void newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
+extern uint32_t newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closePeerStreamCallback(HQUIC,HQUIC);
@@ -22,7 +24,7 @@ extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
-extern void freeBuffer(uint8_t *);
+extern void freeSendBuffer(HQUIC, HQUIC, uint8_t *);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -91,9 +93,9 @@ StreamCallback(
     _Inout_ QUIC_STREAM_EVENT* Event
     )
 {
+	QUIC_STATUS Status;
     switch (Event->Type) {
 	case QUIC_STREAM_EVENT_START_COMPLETE:
-		QUIC_STATUS Status;
 		if (QUIC_FAILED(Status = Event->START_COMPLETE.Status)) {
 			closePeerStreamCallback(Context, Stream);
 			MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
@@ -103,7 +105,7 @@ StreamCallback(
 		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		if  (Event->SEND_COMPLETE.ClientContext) {
-			freeBuffer(((QUIC_BUFFER*)Event->SEND_COMPLETE.ClientContext)->Buffer);
+			freeSendBuffer(Context, Stream, ((QUIC_BUFFER*)Event->SEND_COMPLETE.ClientContext)->Buffer);
 			free(Event->SEND_COMPLETE.ClientContext);
 		}
 		if (LOGS_ENABLED) {
@@ -115,7 +117,11 @@ StreamCallback(
 			printf("[strm][%p] Data received, count: %d\n", Stream, Event->RECEIVE.BufferCount);
 		}
 		if (Event->RECEIVE.BufferCount > 0) {
-			newReadCallback(Context, Stream, Event->RECEIVE.Buffers, Event->RECEIVE.BufferCount);
+			uint32_t n = newReadCallback(Context, Stream, Event->RECEIVE.Buffers, Event->RECEIVE.BufferCount);
+			if (n > 0) {
+				MsQuic->StreamReceiveComplete(Stream, n);
+				return QUIC_STATUS_PENDING;
+			}
 		}
         break;
 	case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
@@ -149,6 +155,16 @@ StreamCallback(
     return QUIC_STATUS_SUCCESS;
 }
 
+int32_t
+AttachAppBuffer(HQUIC Stream, QUIC_BUFFER* buffer) {
+	QUIC_STATUS Status;
+	if (QUIC_FAILED(Status = MsQuic->StreamProvideReceiveBuffers(Stream, 1, buffer))) {
+		printf("Receive buffers failed, 0x%x!\n", Status);
+		return -1;
+	}
+	return 0;
+}
+
 void
 ShutdownConnection(HQUIC connection) {
 	MsQuic->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
@@ -172,7 +188,8 @@ AbortStream(HQUIC stream) {
 
 HQUIC
 CreateStream(
-    _In_ HQUIC Connection
+    _In_ HQUIC Connection,
+    _In_ int8_t useAppBuffers
     )
 {
     QUIC_STATUS Status;
@@ -182,7 +199,12 @@ CreateStream(
 		printf("[strm][%p] Created...\n", Stream);
 	}
 
-    if (QUIC_FAILED(Status = MsQuic->StreamOpen(Connection, QUIC_STREAM_OPEN_FLAG_NONE, StreamCallback, Connection, &Stream))) {
+	enum QUIC_STREAM_OPEN_FLAGS flag = QUIC_STREAM_OPEN_FLAG_NONE;
+	if (useAppBuffers == 1) {
+		flag |= QUIC_STREAM_OPEN_FLAG_APP_OWNED_BUFFERS;
+	}
+
+    if (QUIC_FAILED(Status = MsQuic->StreamOpen(Connection, flag, StreamCallback, Connection, &Stream))) {
         printf("StreamOpen failed, 0x%x!\n", Status);
 		return NULL;
     }
@@ -193,13 +215,15 @@ CreateStream(
 uint64_t
 StartStream(
     _In_ HQUIC Stream,
-    _In_ int8_t FailOpen
+    _In_ int8_t FailOpen,
+    _In_ int8_t useAppBuffers
     )
 {
 	if (LOGS_ENABLED) {
 		printf("[strm][%p] Starting...\n", Stream);
 	}
 
+	QUIC_STATUS Status;
 	enum QUIC_STREAM_START_FLAGS flag = QUIC_STREAM_START_FLAG_NONE;
 	if (FailOpen == 1) {
 		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
@@ -207,7 +231,6 @@ StartStream(
 		flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 	}
 
-    QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
 		if (FailOpen == 0) {
@@ -353,10 +376,10 @@ LoadListenConfiguration(
 		Settings.DatagramReceiveEnabled = TRUE;
 		Settings.IsSet.DatagramReceiveEnabled = TRUE;
 	}
-	if (cfg.DisableSendBuffering != 0) {
-		Settings.SendBufferingEnabled = FALSE;
-		Settings.IsSet.SendBufferingEnabled = TRUE;
-	}
+	// Always disable send buffering
+	// This lowers extra malloc & copy cost
+	Settings.SendBufferingEnabled = FALSE;
+	Settings.IsSet.SendBufferingEnabled = TRUE;
 	if (cfg.MaxBytesPerKey != 0) {
 		Settings.MaxBytesPerKey = cfg.MaxBytesPerKey;
 		Settings.IsSet.MaxBytesPerKey = TRUE;

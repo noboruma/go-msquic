@@ -32,24 +32,53 @@ type Stream interface {
 type ChainedBuffers struct {
 	current *ChainedBuffer
 	tail    *ChainedBuffer
+	copy    bool
+	buffers *sync.Map
 }
 
 func (cbs *ChainedBuffers) HasData() bool {
 	return cbs.current.HasData()
 }
 
-func (cbs *ChainedBuffers) Write(batch [][]byte) {
+func (cbs *ChainedBuffers) Write(batch []byte) {
 	next := ChainedBuffer{}
-	total := 0
-	for _, b := range batch {
-		total += len(b)
-	}
-	next.readBuffer.Grow(total)
-	for _, b := range batch {
-		next.readBuffer.Write(b)
+	if cbs.copy {
+		next.copyReadBuffer.Grow(len(batch))
+		next.copyReadBuffer.Write(batch)
+	} else {
+		next.noCopyReadBuffer = batch
 	}
 	cbs.tail.next.Store(&next)
 	cbs.tail = &next
+}
+
+func findBuffer(subBuf []byte, buffers *sync.Map) []byte {
+	current := unsafe.Pointer(unsafe.SliceData(subBuf))
+	//currentEnd := unsafe.Add(current, len(subBuf))
+	var buffer []byte
+	var offsetStart int
+	buffers.Range(func(key, value any) bool {
+		tmp := value.(recvBuffer)
+		start := unsafe.Pointer(unsafe.SliceData(tmp.goBuffer))
+		end := unsafe.Add(start, len(tmp.goBuffer))
+		if uintptr(current) >= uintptr(start) && uintptr(current) < uintptr(end) {
+			buffer = tmp.goBuffer
+			offsetStart = int(uintptr(current) - uintptr(start))
+			return false
+		}
+		return true
+	})
+	if buffer != nil {
+		return buffer[offsetStart : offsetStart+len(subBuf)]
+	}
+	println("buffer never found!")
+	return buffer
+}
+
+func sliceEnd(subBuf []byte) uintptr {
+	current := unsafe.Pointer(unsafe.SliceData(subBuf))
+	currentEnd := unsafe.Add(current, len(subBuf))
+	return uintptr(currentEnd)
 }
 
 func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
@@ -62,20 +91,38 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 			}
 			cbs.current = next
 		}
-		nn, _ := cbs.current.readBuffer.Read(output[n:])
+		var nn int
+		if cbs.copy {
+			nn, _ = cbs.current.copyReadBuffer.Read(output[n:])
+		} else {
+			nn = copy(output[n:], cbs.current.noCopyReadBuffer[:])
+			cbs.current.noCopyReadBuffer = cbs.current.noCopyReadBuffer[nn:]
+		}
 		n += nn
 		if len(output) == n {
 			break
 		}
 		cbs.current.empty.Store(true)
+		if !cbs.copy {
+			end := sliceEnd(cbs.current.noCopyReadBuffer)
+			if buf, has := cbs.buffers.LoadAndDelete(end); has {
+				b := buf.(recvBuffer)
+				bufferPool.Put(b.goBuffer)
+				C.free(unsafe.Pointer(b.cBuffer))
+				receiveBuffers.Add(-1)
+				b.pinner.Unpin()
+			}
+		}
 	}
 	return n, nil
 }
 
 type ChainedBuffer struct {
-	readBuffer bytes.Buffer
-	next       atomic.Pointer[ChainedBuffer]
-	empty      atomic.Bool
+	noCopyReadBuffer []byte
+	copyReadBuffer   bytes.Buffer
+	next             atomic.Pointer[ChainedBuffer]
+	empty            atomic.Bool
+	copy             bool
 }
 
 func (cb *ChainedBuffer) HasData() bool {
@@ -86,6 +133,17 @@ func (cb *ChainedBuffer) HasData() bool {
 	return next != nil
 }
 
+type recvBuffer struct {
+	cBuffer  uintptr
+	goBuffer []byte
+	pinner   runtime.Pinner
+}
+
+type sendBuffer struct {
+	goBuffer []byte
+	pinner   runtime.Pinner
+}
+
 type streamState struct {
 	readBuffers   ChainedBuffers
 	readDeadline  time.Time
@@ -93,6 +151,18 @@ type streamState struct {
 	writeAccess   sync.Mutex
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
+	recvCount     atomic.Uint32
+	recvTotal     atomic.Uint32
+
+	readDeadlineContext context.Context
+	readDeadlineCancel  context.CancelFunc
+
+	recvBuffers sync.Map //map[uintptr]recvBuffer
+	sendBuffers sync.Map //map[uintptr]sendBuffer
+}
+
+func (ss *streamState) needMoreBuffer() bool {
+	return ss.recvCount.Load()+bufferSize+(bufferSize/4) >= ss.recvTotal.Load() // always keep 1 extra bufferSize
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -109,18 +179,21 @@ type MsQuicStream struct {
 	noAlloc    bool
 }
 
-func newMsQuicStream(s C.HQUIC, connCtx context.Context, noAlloc bool) MsQuicStream {
+func newMsQuicStream(s C.HQUIC, connCtx context.Context, noAlloc, appBuffers bool) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
 	res := MsQuicStream{
 		stream: s,
 		ctx:    ctx,
 		cancel: cancel,
 		state: &streamState{
-			readBuffers:   ChainedBuffers{},
-			readDeadline:  time.Time{},
-			writeDeadline: time.Time{},
-			shutdown:      atomic.Bool{},
-			startSignal:   make(chan struct{}, 1),
+			readBuffers: ChainedBuffers{
+				copy: !appBuffers,
+			},
+			readDeadline:        time.Time{},
+			readDeadlineContext: ctx,
+			writeDeadline:       time.Time{},
+			shutdown:            atomic.Bool{},
+			startSignal:         make(chan struct{}, 1),
 		},
 		readSignal: make(chan struct{}, 1),
 		peerSignal: make(chan struct{}, 1),
@@ -128,6 +201,7 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context, noAlloc bool) MsQuicStr
 	}
 	res.state.readBuffers.current = &ChainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
+	res.state.readBuffers.buffers = &res.state.recvBuffers
 	return res
 }
 
@@ -152,19 +226,13 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 			return 0, io.EOF
 		}
 
-		deadline := state.readDeadline
-		ctx := mqs.ctx
-		if !deadline.IsZero() {
-			if time.Now().After(deadline) {
-				time11.Add(time.Since(now).Milliseconds())
-				return 0, os.ErrDeadlineExceeded
-			}
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithDeadline(ctx, deadline)
-			defer cancel()
-		}
+		ctx := state.readDeadlineContext
 		if !mqs.waitRead(ctx) {
 			time11.Add(time.Since(now).Milliseconds())
+			if state.readDeadlineCancel != nil {
+				state.readDeadlineCancel()
+				state.readDeadlineCancel = nil
+			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return 0, os.ErrDeadlineExceeded
 			}
@@ -185,7 +253,6 @@ func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 	}
 }
 
-var sendBuffers sync.Map //map[uintptr][]byte
 var sendBuffersSize atomic.Int64
 var sendBuffersCount atomic.Int64
 
@@ -210,10 +277,6 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	cNoAlloc := C.uint8_t(0)
 	if mqs.noAlloc {
 		cNoAlloc = C.uint8_t(1)
-		idx := (uintptr)(unsafe.Pointer(unsafe.SliceData(data)))
-		sendBuffers.Store(idx, data)
-		sendBuffersSize.Add(1)
-		sendBuffersCount.Add(1)
 	}
 	n := cStreamWrite(mqs.stream,
 		(*C.uint8_t)(unsafe.SliceData(data[:])),
@@ -233,7 +296,16 @@ func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
 }
 
 func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
-	mqs.state.readDeadline = ttl
+	if mqs.state.readDeadlineCancel != nil {
+		mqs.state.readDeadlineCancel()
+		mqs.state.readDeadlineCancel = nil
+	}
+	if !ttl.IsZero() {
+		mqs.state.readDeadline = ttl
+		mqs.state.readDeadlineContext, mqs.state.readDeadlineCancel = context.WithDeadline(mqs.ctx, ttl)
+	} else {
+		mqs.state.readDeadlineContext = mqs.ctx
+	}
 	return nil
 }
 
@@ -272,22 +344,6 @@ func (mqs MsQuicStream) appClose() error {
 	return nil
 }
 
-//func (mqs MsQuicStream) shutdownClose() error {
-//	mqs.cancel()
-//	mqs.state.writeAccess.Lock()
-//	defer mqs.state.writeAccess.Unlock()
-//	if !mqs.state.shutdown.Swap(true) {
-//		//cAbortStream(mqs.stream)
-//		cShutdownStream(mqs.stream)
-//		select {
-//		case <-mqs.peerSignal:
-//		case <-time.After(3 * time.Second):
-//			cAbortStream(mqs.stream)
-//		}
-//	}
-//	return nil
-//}
-
 func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.peerClose()
@@ -305,7 +361,9 @@ func (mqs MsQuicStream) peerCloseACK() {
 }
 
 func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
-	var buffer [32 * 1024]byte
+	buf := bufferPool.Get()
+	buffer := buf.([]byte)
+	defer bufferPool.Put(buf)
 	n := int64(0)
 	for mqs.ctx.Err() == nil {
 		bn, err := mqs.Read(buffer[:])
@@ -330,7 +388,9 @@ func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
-	var buffer [32 * 1024]byte
+	buf := bufferPool.Get()
+	buffer := buf.([]byte)
+	defer bufferPool.Put(buf)
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
@@ -345,15 +405,18 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 	return n, io.EOF
 }
 
-var bufferPool = sync.Pool{
-	New: func() any {
-		return make([]byte, 32*1024)
-	},
-}
-
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	for mqs.ctx.Err() == nil {
-		buffer := bufferPool.Get().([]byte)
+		buf := bufferPool.Get()
+		buffer := buf.([]byte)
+		pinner := runtime.Pinner{}
+		pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
+		idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+		if _, has := mqs.state.sendBuffers.Load(idx); has {
+			println("Error: buffer reused")
+		}
+		sendBuffersSize.Add(1)
+		sendBuffersCount.Add(1)
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
 			var nn int
@@ -361,8 +424,15 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 			n += int64(nn)
 		}
 		if err != nil {
+			sendBuffersSize.Add(-1)
+			bufferPool.Put(buf)
+			pinner.Unpin()
 			return n, err
 		}
+		mqs.state.sendBuffers.Store(idx, sendBuffer{
+			goBuffer: buffer,
+			pinner:   pinner,
+		})
 	}
 	return n, io.EOF
 }

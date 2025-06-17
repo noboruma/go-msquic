@@ -2,6 +2,8 @@
 package quic
 
 import (
+	"runtime"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -10,7 +12,7 @@ import (
 // #include "inc/msquic.h"
 import "C"
 
-var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13 atomic.Int64
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers atomic.Int64
 
 func init() {
 	go func() {
@@ -29,8 +31,9 @@ func init() {
 				"streamReadWait", time11.Swap(0),
 				"streamReadDataArrived", time12.Swap(0),
 				"finalStream", time13.Swap(0), "\n",
-				"buffersSize", sendBuffersSize.Load(),
-				"buffersCount", sendBuffersCount.Swap(0))
+				"sendBuffersSize", sendBuffersSize.Load(),
+				"sendBuffersReqs", sendBuffersCount.Swap(0),
+				"receiveCount", receiveBuffers.Load())
 		}
 	}()
 }
@@ -47,7 +50,8 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	}
 	res := newMsQuicConn(c,
 		listener.(MsQuicListener).failOnOpenStream,
-		listener.(MsQuicListener).noAllocStream)
+		listener.(MsQuicListener).noAllocStream,
+		listener.(MsQuicListener).appBuffers)
 
 	select {
 	case listener.(MsQuicListener).acceptQueue <- res:
@@ -89,7 +93,7 @@ func closePeerConnectionCallback(c C.HQUIC) {
 }
 
 //export newReadCallback
-func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_t) {
+func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uint32_t) C.uint32_t {
 
 	now := time.Now()
 	defer func() {
@@ -99,27 +103,42 @@ func newReadCallback(c, s C.HQUIC, buffers *C.QUIC_BUFFER, bufferCount C.uint32_
 	if !has {
 		cAbortConnection(c)
 		cAbortStream(s)
-		return // already closed
+		return 0 // already closed
 	}
 	rawStream, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		cAbortStream(s)
-		return // already closed
+		return 0 // already closed
 	}
 
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
 
-	//now := time.Now()
-	var batch [][]byte
-	for _, buffer := range unsafe.Slice(buffers, bufferCount) {
-		batch = append(batch, unsafe.Slice((*byte)(buffer.Buffer), buffer.Length))
+	n := C.uint32_t(0)
+	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
+		subBuf := unsafe.Slice((*byte)(buffer.Buffer), buffer.Length)
+		trueBuf := findBuffer(subBuf, &state.recvBuffers)
+		state.readBuffers.Write(trueBuf)
+		n += buffer.Length
 	}
-	state.readBuffers.Write(batch)
 	select {
 	case stream.readSignal <- struct{}{}:
 	default:
 	}
+	if rawConn.(MsQuicConn).useAppBuffers {
+		state.recvCount.Add(uint32(n))
+		if state.needMoreBuffer() {
+			extraBuf := provideAppBuffer(stream)
+			if cAttachAppBuffer(stream.stream, extraBuf) == -1 {
+				cAbortStream(stream.stream)
+				return 0
+			}
+			stream.state.recvTotal.Add(uint32(extraBuf.Length))
+		}
+	} else {
+		n = 0
+	}
+	return n
 }
 
 //export newStreamCallback
@@ -142,7 +161,19 @@ func newStreamCallback(c, s C.HQUIC) {
 		return
 	}
 
-	res := newMsQuicStream(s, conn.ctx, conn.noAlloc)
+	res := newMsQuicStream(s, conn.ctx, conn.noAlloc, conn.useAppBuffers)
+
+	if conn.useAppBuffers {
+		for range initBufs {
+			initBuf := provideAppBuffer(res)
+			if cAttachAppBuffer(s, initBuf) == -1 {
+				cAbortStream(s)
+				return
+			}
+			res.state.recvTotal.Add(uint32(initBuf.Length))
+		}
+	}
+
 	select {
 	case conn.acceptStreamQueue <- res:
 		rawConn.(MsQuicConn).streams.Store(s, res)
@@ -177,8 +208,8 @@ func closePeerStreamCallback(c, s C.HQUIC) {
 
 //export closeStreamCallback
 func closeStreamCallback(c, s C.HQUIC) {
-
 	now := time.Now()
+
 	defer func() {
 		time13.Add(time.Since(now).Milliseconds())
 	}()
@@ -187,6 +218,7 @@ func closeStreamCallback(c, s C.HQUIC) {
 		cAbortConnection(c)
 		return // already closed
 	}
+
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
 		return // already closed
@@ -195,6 +227,26 @@ func closeStreamCallback(c, s C.HQUIC) {
 	stream := res.(MsQuicStream)
 	stream.appClose()
 
+	res.(MsQuicStream).state.recvBuffers.Range(func(key, _ any) bool {
+		if value, has := res.(MsQuicStream).state.recvBuffers.LoadAndDelete(key); has {
+			v := value.(recvBuffer)
+			bufferPool.Put(v.goBuffer)
+			C.free(unsafe.Pointer(v.cBuffer))
+			v.pinner.Unpin()
+			receiveBuffers.Add(-1)
+		}
+		return true
+	})
+
+	res.(MsQuicStream).state.sendBuffers.Range(func(key, _ any) bool {
+		if value, has := res.(MsQuicStream).state.sendBuffers.LoadAndDelete(key); has {
+			v := value.(sendBuffer)
+			bufferPool.Put(v.goBuffer)
+			v.pinner.Unpin()
+			sendBuffersSize.Add(-1)
+		}
+		return true
+	})
 }
 
 //export startStreamCallback
@@ -234,6 +286,7 @@ func startStreamCallback(c, s C.HQUIC) {
 func startConnectionCallback(c C.HQUIC) {
 
 	now := time.Now()
+
 	defer func() {
 		time8.Add(time.Since(now).Milliseconds())
 	}()
@@ -247,16 +300,66 @@ func startConnectionCallback(c C.HQUIC) {
 	select {
 	case res.(MsQuicConn).startSignal <- struct{}{}:
 	default:
+
 	}
 }
 
-//export freeBuffer
-func freeBuffer(buffer *C.uint8_t) {
+//export freeSendBuffer
+func freeSendBuffer(c, s C.HQUIC, buffer *C.uint8_t) {
+
+	rawConn, has := connections.Load(c)
+	if !has {
+		cAbortConnection(c)
+		return // already closed
+	}
+	res, has := rawConn.(MsQuicConn).streams.Load(s)
+	if !has {
+		return // already closed
+	}
+
 	idx := uintptr(unsafe.Pointer(buffer))
-	sBuffer, has := sendBuffers.Load(idx)
+	sBuffer, has := res.(MsQuicStream).state.sendBuffers.LoadAndDelete(idx)
 	if has {
-		bufferPool.Put(sBuffer)
-		sendBuffers.Delete(idx)
+		v := sBuffer.(sendBuffer)
+		bufferPool.Put(v.goBuffer)
+		v.pinner.Unpin()
 		sendBuffersSize.Add(-1)
 	}
+}
+
+const bufferSize = 32 * 1024
+const initBufs = 2
+
+var bufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, bufferSize)
+	},
+}
+
+func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
+
+	goSlicePool := bufferPool.Get()
+	goSlice := goSlicePool.([]byte)
+
+	pinner := runtime.Pinner{}
+	pinner.Pin(unsafe.Pointer(unsafe.SliceData(goSlice)))
+
+	receiveBuffers.Add(1)
+	addr := uintptr(unsafe.Add(unsafe.Pointer(unsafe.SliceData(goSlice)), len(goSlice)))
+
+	size := unsafe.Sizeof(C.QUIC_BUFFER{})
+
+	raw := C.malloc(C.size_t(size))
+	pinner.Pin(raw)
+	res := (*C.QUIC_BUFFER)(raw)
+	res.Buffer = (*C.uint8_t)(unsafe.SliceData(goSlice))
+	res.Length = C.uint32_t(len(goSlice))
+
+	s.state.recvBuffers.Store(addr, recvBuffer{
+		goBuffer: goSlice,
+		cBuffer:  uintptr(raw),
+		pinner:   pinner,
+	})
+
+	return res
 }
