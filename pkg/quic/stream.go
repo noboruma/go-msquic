@@ -59,10 +59,11 @@ func findBuffer(subBuf []byte, buffers *sync.Map) []byte {
 	var offsetStart int
 	buffers.Range(func(key, value any) bool {
 		tmp := value.(recvBuffer)
-		start := unsafe.Pointer(unsafe.SliceData(tmp.goBuffer))
-		end := unsafe.Add(start, len(tmp.goBuffer))
+		goBuffer := *tmp.goBuffer
+		start := unsafe.Pointer(unsafe.SliceData(goBuffer))
+		end := unsafe.Add(start, len(goBuffer))
 		if uintptr(current) >= uintptr(start) && uintptr(current) < uintptr(end) {
-			buffer = tmp.goBuffer
+			buffer = goBuffer
 			offsetStart = int(uintptr(current) - uintptr(start))
 			return false
 		}
@@ -134,19 +135,18 @@ func (cb *ChainedBuffer) HasData() bool {
 }
 
 type recvBuffer struct {
-	cBuffer  uintptr
-	goBuffer []byte
+	cBuffer  *C.QUIC_BUFFER
+	goBuffer *[]byte
 	pinner   runtime.Pinner
 }
 
 type sendBuffer struct {
-	goBuffer []byte
+	goBuffer *[]byte
 	pinner   runtime.Pinner
 }
 
 type streamState struct {
 	readBuffers   ChainedBuffers
-	readDeadline  time.Time
 	writeDeadline time.Time
 	writeAccess   sync.Mutex
 	startSignal   chan struct{}
@@ -189,7 +189,6 @@ func newMsQuicStream(s C.HQUIC, connCtx context.Context, noAlloc, appBuffers boo
 			readBuffers: ChainedBuffers{
 				copy: !appBuffers,
 			},
-			readDeadline:        time.Time{},
 			readDeadlineContext: ctx,
 			writeDeadline:       time.Time{},
 			shutdown:            atomic.Bool{},
@@ -277,6 +276,9 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	cNoAlloc := C.uint8_t(0)
 	if mqs.noAlloc {
 		cNoAlloc = C.uint8_t(1)
+		pinner := runtime.Pinner{}
+		pinner.Pin(unsafe.SliceData(data))
+		defer pinner.Unpin()
 	}
 	n := cStreamWrite(mqs.stream,
 		(*C.uint8_t)(unsafe.SliceData(data[:])),
@@ -301,7 +303,6 @@ func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 		mqs.state.readDeadlineCancel = nil
 	}
 	if !ttl.IsZero() {
-		mqs.state.readDeadline = ttl
 		mqs.state.readDeadlineContext, mqs.state.readDeadlineCancel = context.WithDeadline(mqs.ctx, ttl)
 	} else {
 		mqs.state.readDeadlineContext = mqs.ctx
@@ -361,8 +362,8 @@ func (mqs MsQuicStream) peerCloseACK() {
 }
 
 func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
-	buf := bufferPool.Get()
-	buffer := buf.([]byte)
+	buf := bufferPool.Get().(*[]byte)
+	buffer := *buf
 	defer bufferPool.Put(buf)
 	n := int64(0)
 	for mqs.ctx.Err() == nil {
@@ -388,8 +389,8 @@ func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
-	buf := bufferPool.Get()
-	buffer := buf.([]byte)
+	buf := bufferPool.Get().(*[]byte)
+	buffer := *buf
 	defer bufferPool.Put(buf)
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
@@ -407,8 +408,8 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	for mqs.ctx.Err() == nil {
-		buf := bufferPool.Get()
-		buffer := buf.([]byte)
+		buf := bufferPool.Get().(*[]byte)
+		buffer := *buf
 		pinner := runtime.Pinner{}
 		pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
 		idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
@@ -430,7 +431,7 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 			return n, err
 		}
 		mqs.state.sendBuffers.Store(idx, sendBuffer{
-			goBuffer: buffer,
+			goBuffer: buf,
 			pinner:   pinner,
 		})
 	}

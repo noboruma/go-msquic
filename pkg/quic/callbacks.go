@@ -340,32 +340,32 @@ const initBufs = 2
 
 var bufferPool = sync.Pool{
 	New: func() any {
-		return make([]byte, bufferSize)
+		res := make([]byte, bufferSize)
+		return &res
 	},
 }
 
 func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 
-	goSlicePool := bufferPool.Get()
-	goSlice := goSlicePool.([]byte)
+	goSlicePool := bufferPool.Get().(*[]byte)
+	goSlice := *goSlicePool
+	sliceUnder := unsafe.Pointer(unsafe.SliceData(goSlice))
 
 	pinner := runtime.Pinner{}
-	pinner.Pin(unsafe.Pointer(unsafe.SliceData(goSlice)))
+	pinner.Pin(sliceUnder)
 
 	receiveBuffers.Add(1)
-	addr := uintptr(unsafe.Add(unsafe.Pointer(unsafe.SliceData(goSlice)), len(goSlice)))
+	endAddr := uintptr(unsafe.Add(sliceUnder, len(goSlice)))
 
 	size := unsafe.Sizeof(C.QUIC_BUFFER{})
-
-	raw := C.malloc(C.size_t(size))
-	pinner.Pin(raw)
-	res := (*C.QUIC_BUFFER)(raw)
-	res.Buffer = (*C.uint8_t)(unsafe.SliceData(goSlice))
+	res := (*C.QUIC_BUFFER)(C.malloc(C.size_t(size)))
+	pinner.Pin(res)
+	res.Buffer = (*C.uint8_t)(sliceUnder)
 	res.Length = C.uint32_t(len(goSlice))
 
-	s.state.recvBuffers.Store(addr, recvBuffer{
-		goBuffer: goSlice,
-		cBuffer:  uintptr(raw),
+	s.state.recvBuffers.Store(endAddr, recvBuffer{
+		goBuffer: goSlicePool,
+		cBuffer:  res,
 		pinner:   pinner,
 	})
 
