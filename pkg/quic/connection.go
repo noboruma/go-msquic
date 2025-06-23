@@ -35,11 +35,12 @@ type Config struct {
 	MaxStatelessOperations        int64
 	TracePerfCounts               func([]string, []uint64)
 	TracePerfCountReport          time.Duration
-	FailOnOpenStream              bool
-	EnableDatagramReceive         bool
-	DisableSendBuffering          bool // Do not allocate & copy sent buffers
-	MaxBytesPerKey                int64
-	EnableAppBuffering            bool // This flags is global across all listeners & dialers
+	//FailOnOpenStream       bool // deprecated in favor of DisableFailOnOpenStream
+	DisableFailOnOpenStream bool
+	EnableDatagramReceive   bool
+	DisableSendBuffering    bool // Do not allocate & copy sent buffers
+	MaxBytesPerKey          int64
+	EnableAppBuffering      bool // This flags is global across all listeners & dialers
 }
 
 type MsQuicConn struct {

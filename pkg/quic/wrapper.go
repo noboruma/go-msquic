@@ -159,7 +159,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if listener == nil {
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, cfg.FailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
+	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, !cfg.DisableFailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
 	listeners.Store(listener, res)
 
 	status := C.StartListener(listener, cAddr, C.uint16_t(portInt), buffer)
@@ -218,7 +218,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 	if conn == nil {
 		return MsQuicConn{}, fmt.Errorf("error creating listener")
 	}
-	res := newMsQuicConn(conn, cfg.FailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
+	res := newMsQuicConn(conn, !cfg.DisableFailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
 	_, load := connections.LoadOrStore(conn, res)
 
 	if load {
@@ -280,7 +280,7 @@ func cDatagramSendConnection(c C.HQUIC, msg []byte) C.int32_t {
 	buffer := new(C.QUIC_BUFFER)
 	*buffer = C.QUIC_BUFFER{
 		Buffer: (*C.uint8_t)(unsafe.SliceData(msg)),
-		Length : C.uint32_t(len(msg)),
+		Length: C.uint32_t(len(msg)),
 	}
 	pinner := runtime.Pinner{}
 	pinner.Pin(buffer)
