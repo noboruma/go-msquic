@@ -54,6 +54,7 @@ type MsQuicConn struct {
 	failOpenStream    bool
 	noAlloc           bool
 	useAppBuffers     bool // Receive side only
+	datagrams         chan []byte
 }
 
 func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicConn {
@@ -185,4 +186,22 @@ func (mqc MsQuicConn) Context() context.Context {
 
 func (mqc MsQuicConn) RemoteAddr() net.Addr {
 	return &mqc.remoteAddr
+}
+
+func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.ctx.Done():
+		return nil, c.ctx.Err()
+	case msg := <-c.datagrams:
+		return msg, nil
+	}
+}
+
+func (c MsQuicConn) SendDatagram(msg []byte) error {
+	if cDatagramSendConnection(c.conn, msg) != 0 {
+		return fmt.Errorf("error encountered while sending datagram")
+	}
+	return nil
 }

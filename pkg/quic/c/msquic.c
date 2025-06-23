@@ -25,6 +25,7 @@ extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
 extern void freeSendBuffer(HQUIC, HQUIC, uint8_t *);
+extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -175,6 +176,15 @@ AbortConnection(HQUIC connection) {
 	MsQuic->ConnectionShutdown(connection, QUIC_CONNECTION_SHUTDOWN_FLAG_SILENT, 0);
 }
 
+int32_t
+DatagramSendConnection(HQUIC connection, QUIC_BUFFER* buffer) {
+	QUIC_STATUS Status;
+	if (QUIC_FAILED(Status = MsQuic->DatagramSend(connection, buffer, 1, QUIC_SEND_FLAG_NONE, NULL))) {
+		return -1;
+	}
+	return 0;
+}
+
 void
 ShutdownStream(HQUIC stream) {
 	// This only shutdown sending part
@@ -298,6 +308,9 @@ ConnectionCallback(
 			printf("[conn][%p] Connection resumed!\n", Connection);
 		}
         break;
+	case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED:
+		newDatagramCallback(Connection, Event->DATAGRAM_RECEIVED.Buffer);
+		break;
     default:
         break;
     }

@@ -275,6 +275,14 @@ func cAbortConnection(c C.HQUIC) {
 	C.AbortConnection(c)
 }
 
+func cDatagramSendConnection(c C.HQUIC, msg []byte) C.int32_t {
+	buffer := C.QUIC_BUFFER{
+		Buffer: (*C.uint8_t)(unsafe.SliceData(msg)),
+		Length : C.uint32_t(len(msg)),
+	}
+	return C.DatagramSendConnection(c, &buffer)
+}
+
 func cAttachAppBuffer(s C.HQUIC, buffer *C.QUIC_BUFFER) C.int32_t {
 	return C.AttachAppBuffer(s, buffer)
 }

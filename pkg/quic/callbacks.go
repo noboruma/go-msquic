@@ -117,7 +117,12 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	n := C.uint32_t(0)
 	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
 		subBuf := unsafe.Slice((*byte)(buffer.Buffer), buffer.Length)
-		trueBuf := findBuffer(subBuf, &state.recvBuffers)
+		var trueBuf []byte
+		if rawConn.(MsQuicConn).useAppBuffers {
+			trueBuf = findBuffer(subBuf, &state.recvBuffers)
+		} else {
+			trueBuf = subBuf
+		}
 		state.readBuffers.Write(trueBuf)
 		n += buffer.Length
 	}
@@ -362,4 +367,22 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 	})
 
 	return res
+}
+
+//export newDatagramCallback
+func newDatagramCallback(c C.HQUIC, recvBuffer *C.QUIC_BUFFER) {
+
+	rawConn, has := connections.Load(c)
+	if !has {
+		cAbortConnection(c)
+		return // already closed
+	}
+
+	conn := rawConn.(MsQuicConn)
+
+	subBuf := unsafe.Slice((*byte)(recvBuffer.Buffer), recvBuffer.Length)
+	msg := make([]byte, recvBuffer.Length)
+	copy(msg, subBuf)
+
+	conn.datagrams <- msg
 }
