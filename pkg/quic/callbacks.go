@@ -371,7 +371,6 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 
 //export newDatagramCallback
 func newDatagramCallback(c C.HQUIC, recvBuffer *C.QUIC_BUFFER) {
-
 	rawConn, has := connections.Load(c)
 	if !has {
 		cAbortConnection(c)

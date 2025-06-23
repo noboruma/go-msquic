@@ -40,6 +40,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"runtime"
 	"strconv"
 	"sync"
 	"time"
@@ -276,11 +277,16 @@ func cAbortConnection(c C.HQUIC) {
 }
 
 func cDatagramSendConnection(c C.HQUIC, msg []byte) C.int32_t {
-	buffer := C.QUIC_BUFFER{
+	buffer := new(C.QUIC_BUFFER)
+	*buffer = C.QUIC_BUFFER{
 		Buffer: (*C.uint8_t)(unsafe.SliceData(msg)),
 		Length : C.uint32_t(len(msg)),
 	}
-	return C.DatagramSendConnection(c, &buffer)
+	pinner := runtime.Pinner{}
+	pinner.Pin(buffer)
+	pinner.Pin(unsafe.SliceData(msg))
+	defer pinner.Unpin()
+	return C.DatagramSendConnection(c, buffer)
 }
 
 func cAttachAppBuffer(s C.HQUIC, buffer *C.QUIC_BUFFER) C.int32_t {

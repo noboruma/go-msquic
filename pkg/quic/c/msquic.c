@@ -180,6 +180,7 @@ int32_t
 DatagramSendConnection(HQUIC connection, QUIC_BUFFER* buffer) {
 	QUIC_STATUS Status;
 	if (QUIC_FAILED(Status = MsQuic->DatagramSend(connection, buffer, 1, QUIC_SEND_FLAG_NONE, NULL))) {
+		printf("failed to send datagram: %d", Status);
 		return -1;
 	}
 	return 0;
@@ -393,6 +394,7 @@ LoadListenConfiguration(
 	// This lowers extra malloc & copy cost
 	Settings.SendBufferingEnabled = FALSE;
 	Settings.IsSet.SendBufferingEnabled = TRUE;
+
 	if (cfg.MaxBytesPerKey != 0) {
 		Settings.MaxBytesPerKey = cfg.MaxBytesPerKey;
 		Settings.IsSet.MaxBytesPerKey = TRUE;

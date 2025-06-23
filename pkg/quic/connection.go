@@ -20,6 +20,8 @@ type Connection interface {
 	Close() error
 	RemoteAddr() net.Addr
 	Context() context.Context
+	SendDatagram(msg []byte) error
+	ReceiveDatagram(ctx context.Context) ([]byte, error)
 }
 
 type Config struct {
@@ -76,6 +78,7 @@ func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicCon
 		startSignal:       make(chan struct{}, 1),
 		noAlloc:           noAlloc,
 		useAppBuffers:     useAppBuffers,
+		datagrams:         make(chan []byte),
 	}
 }
 
@@ -201,6 +204,7 @@ func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 
 func (c MsQuicConn) SendDatagram(msg []byte) error {
 	if cDatagramSendConnection(c.conn, msg) != 0 {
+
 		return fmt.Errorf("error encountered while sending datagram")
 	}
 	return nil
