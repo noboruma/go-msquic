@@ -2,6 +2,7 @@
 package quic
 
 import (
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -15,27 +16,29 @@ import "C"
 var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers atomic.Int64
 
 func init() {
-	go func() {
-		for {
-			<-time.After(15 * time.Second)
-			println("newConnectionCa", time1.Swap(0),
-				"closeConnection", time2.Swap(0),
-				"closePeerConnec", time3.Swap(0),
-				"newReadCallback", time4.Swap(0),
-				"newStreamCallba", time5.Swap(0),
-				"closeStreamCall", time6.Swap(0),
-				"startStreamCall", time7.Swap(0),
-				"startConnection", time8.Swap(0),
-				"streamWrite", time9.Swap(0), "\n",
-				"streamRead", time10.Swap(0),
-				"streamReadWait", time11.Swap(0),
-				"streamReadDataArrived", time12.Swap(0),
-				"finalStream", time13.Swap(0), "\n",
-				"sendBuffersSize", sendBuffersSize.Load(),
-				"sendBuffersReqs", sendBuffersCount.Swap(0),
-				"receiveCount", receiveBuffers.Load())
-		}
-	}()
+	if os.Getenv("QUIC_DEBUG") != "" {
+		go func() {
+			for {
+				<-time.After(15 * time.Second)
+				println("newConnectionCa", time1.Swap(0),
+					"closeConnection", time2.Swap(0),
+					"closePeerConnec", time3.Swap(0),
+					"newReadCallback", time4.Swap(0),
+					"newStreamCallba", time5.Swap(0),
+					"closeStreamCall", time6.Swap(0),
+					"startStreamCall", time7.Swap(0),
+					"startConnection", time8.Swap(0),
+					"streamWrite", time9.Swap(0), "\n",
+					"streamRead", time10.Swap(0),
+					"streamReadWait", time11.Swap(0),
+					"streamReadDataArrived", time12.Swap(0),
+					"finalStream", time13.Swap(0), "\n",
+					"sendBuffersSize", sendBuffersSize.Load(),
+					"sendBuffersReqs", sendBuffersCount.Swap(0),
+					"receiveCount", receiveBuffers.Load())
+			}
+		}()
+	}
 }
 
 //export newConnectionCallback

@@ -48,6 +48,7 @@ type MsQuicConn struct {
 	conn              C.HQUIC
 	config            C.HQUIC
 	acceptStreamQueue chan MsQuicStream
+	datagrams         chan []byte
 	cancel            context.CancelFunc
 	shutdown          *atomic.Bool
 	streams           *sync.Map //map[C.HQUIC]MsQuicStream
@@ -56,7 +57,6 @@ type MsQuicConn struct {
 	failOpenStream    bool
 	noAlloc           bool
 	useAppBuffers     bool // Receive side only
-	datagrams         chan []byte
 }
 
 func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicConn {
@@ -204,7 +204,6 @@ func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 
 func (c MsQuicConn) SendDatagram(msg []byte) error {
 	if cDatagramSendConnection(c.conn, msg) != 0 {
-
 		return fmt.Errorf("error encountered while sending datagram")
 	}
 	return nil
