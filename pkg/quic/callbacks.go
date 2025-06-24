@@ -235,26 +235,7 @@ func closeStreamCallback(c, s C.HQUIC) {
 	stream := res.(MsQuicStream)
 	stream.appClose()
 
-	res.(MsQuicStream).state.recvBuffers.Range(func(key, _ any) bool {
-		if value, has := res.(MsQuicStream).state.recvBuffers.LoadAndDelete(key); has {
-			v := value.(recvBuffer)
-			bufferPool.Put(v.goBuffer)
-			C.free(unsafe.Pointer(v.cBuffer))
-			v.pinner.Unpin()
-			receiveBuffers.Add(-1)
-		}
-		return true
-	})
-
-	res.(MsQuicStream).state.sendBuffers.Range(func(key, _ any) bool {
-		if value, has := res.(MsQuicStream).state.sendBuffers.LoadAndDelete(key); has {
-			v := value.(sendBuffer)
-			bufferPool.Put(v.goBuffer)
-			v.pinner.Unpin()
-			sendBuffersSize.Add(-1)
-		}
-		return true
-	})
+	res.(MsQuicStream).releaseBuffers()
 }
 
 //export startStreamCallback

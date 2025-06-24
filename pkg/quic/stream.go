@@ -437,3 +437,26 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return n, io.EOF
 }
+
+func (res MsQuicStream) releaseBuffers() {
+	res.state.recvBuffers.Range(func(key, _ any) bool {
+		if value, has := res.state.recvBuffers.LoadAndDelete(key); has {
+			v := value.(recvBuffer)
+			bufferPool.Put(v.goBuffer)
+			C.free(unsafe.Pointer(v.cBuffer))
+			v.pinner.Unpin()
+			receiveBuffers.Add(-1)
+		}
+		return true
+	})
+
+	res.state.sendBuffers.Range(func(key, _ any) bool {
+		if value, has := res.state.sendBuffers.LoadAndDelete(key); has {
+			v := value.(sendBuffer)
+			bufferPool.Put(v.goBuffer)
+			v.pinner.Unpin()
+			sendBuffersSize.Add(-1)
+		}
+		return true
+	})
+}

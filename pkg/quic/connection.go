@@ -152,6 +152,9 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		for range initBufs {
 			initBuf := provideAppBuffer(res)
 			if cAttachAppBuffer(stream, initBuf) == -1 {
+				mqc.streams.Delete(stream)
+				res.releaseBuffers()
+				mqc.openStream.RUnlock()
 				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
 			}
 			res.state.recvTotal.Add(uint32(initBuf.Length))
@@ -159,12 +162,16 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 
 	if cStartStream(stream, enable, useAppBuffers) == -1 {
+		mqc.streams.Delete(stream)
+		res.releaseBuffers()
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
 	mqc.openStream.RUnlock()
 	if mqc.failOpenStream {
 		if !res.waitStart() {
+			mqc.streams.Delete(stream)
+			res.releaseBuffers()
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}
 	}
