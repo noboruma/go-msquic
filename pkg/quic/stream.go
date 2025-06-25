@@ -95,8 +95,8 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 		if cbs.copy {
 			nn, _ = cbs.current.copyReadBuffer.Read(output[n:])
 		} else {
-			nn = copy(output[n:], cbs.current.noCopyReadBuffer[:])
-			cbs.current.noCopyReadBuffer = cbs.current.noCopyReadBuffer[nn:]
+			nn = copy(output[n:], cbs.current.noCopyReadBuffer[cbs.current.noCopyReadIndex:])
+			cbs.current.noCopyReadIndex += nn
 		}
 		n += nn
 		if len(output) == n {
@@ -119,6 +119,7 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 
 type ChainedBuffer struct {
 	noCopyReadBuffer []byte
+	noCopyReadIndex  int // use index as p[len(p):] reset to the first address
 	copyReadBuffer   bytes.Buffer
 	next             atomic.Pointer[ChainedBuffer]
 	empty            atomic.Bool
@@ -157,9 +158,9 @@ type streamState struct {
 	readDeadlineCancel  context.CancelFunc
 
 	bufferReleaseAccess sync.Mutex
-	recvBuffers    sync.Map //map[uintptr]recvBuffer
-	sendBuffers    sync.Map //map[uintptr]sendBuffer
-	sendPinBuffers sync.Map //map[uintptr]runtime.Pinner
+	recvBuffers         sync.Map //map[uintptr]recvBuffer
+	sendBuffers         sync.Map //map[uintptr]sendBuffer
+	sendPinBuffers      sync.Map //map[uintptr]runtime.Pinner
 }
 
 func (ss *streamState) needMoreBuffer() bool {
