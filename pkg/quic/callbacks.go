@@ -140,8 +140,8 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	}
 	if rawConn.(MsQuicConn).useAppBuffers {
 		stream.state.bufferReleaseAccess.Lock()
+		state.recvCount.Add(uint32(n))
 		if state.needMoreBuffer() && stream.ctx.Err() == nil {
-			state.recvCount.Add(uint32(n))
 			err := provideAndAttachAppBuffer(s, stream)
 			if err != nil {
 				stream.state.bufferReleaseAccess.Unlock()
