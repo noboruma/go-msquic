@@ -52,8 +52,7 @@ func (cbs *ChainedBuffers) Write(batch []byte) {
 	cbs.tail = &next
 }
 
-func findBuffer(subBuf []byte, buffers *sync.Map) []byte {
-	current := unsafe.Pointer(unsafe.SliceData(subBuf))
+func findBuffer(current uintptr, length int, buffers *sync.Map) []byte {
 	//currentEnd := unsafe.Add(current, len(subBuf))
 	var buffer []byte
 	var offsetStart int
@@ -70,7 +69,7 @@ func findBuffer(subBuf []byte, buffers *sync.Map) []byte {
 		return true
 	})
 	if buffer != nil {
-		return buffer[offsetStart : offsetStart+len(subBuf)]
+		return buffer[offsetStart : offsetStart+length]
 	}
 	println("buffer never found!")
 	return buffer
@@ -157,8 +156,10 @@ type streamState struct {
 	readDeadlineContext context.Context
 	readDeadlineCancel  context.CancelFunc
 
-	recvBuffers sync.Map //map[uintptr]recvBuffer
-	sendBuffers sync.Map //map[uintptr]sendBuffer
+	bufferReleaseAccess sync.Mutex
+	recvBuffers    sync.Map //map[uintptr]recvBuffer
+	sendBuffers    sync.Map //map[uintptr]sendBuffer
+	sendPinBuffers sync.Map //map[uintptr]runtime.Pinner
 }
 
 func (ss *streamState) needMoreBuffer() bool {
@@ -254,6 +255,7 @@ func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 
 var sendBuffersSize atomic.Int64
 var sendBuffersCount atomic.Int64
+var recvBuffersCount atomic.Int64
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	now := time.Now()
@@ -278,7 +280,7 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 		cNoAlloc = C.uint8_t(1)
 		pinner := runtime.Pinner{}
 		pinner.Pin(unsafe.SliceData(data))
-		defer pinner.Unpin()
+		state.sendPinBuffers.Store(uintptr(unsafe.Pointer(unsafe.SliceData(data))), pinner)
 	}
 	n := cStreamWrite(mqs.stream,
 		(*C.uint8_t)(unsafe.SliceData(data[:])),
@@ -439,6 +441,9 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (res MsQuicStream) releaseBuffers() {
+	res.state.bufferReleaseAccess.Lock()
+	defer res.state.bufferReleaseAccess.Unlock()
+
 	res.state.recvBuffers.Range(func(key, _ any) bool {
 		if value, has := res.state.recvBuffers.LoadAndDelete(key); has {
 			v := value.(recvBuffer)
@@ -456,6 +461,14 @@ func (res MsQuicStream) releaseBuffers() {
 			bufferPool.Put(v.goBuffer)
 			v.pinner.Unpin()
 			sendBuffersSize.Add(-1)
+		}
+		return true
+	})
+
+	res.state.sendPinBuffers.Range(func(key, _ any) bool {
+		if value, has := res.state.sendPinBuffers.LoadAndDelete(key); has {
+			v := value.(runtime.Pinner)
+			v.Unpin()
 		}
 		return true
 	})

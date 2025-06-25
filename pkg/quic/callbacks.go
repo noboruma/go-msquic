@@ -2,6 +2,7 @@
 package quic
 
 import (
+	"errors"
 	"os"
 	"runtime"
 	"sync"
@@ -33,9 +34,10 @@ func init() {
 					"streamReadWait", time11.Swap(0),
 					"streamReadDataArrived", time12.Swap(0),
 					"finalStream", time13.Swap(0), "\n",
-					"sendBuffersSize", sendBuffersSize.Load(),
-					"sendBuffersReqs", sendBuffersCount.Swap(0),
-					"receiveCount", receiveBuffers.Load())
+					"sendSize", sendBuffersSize.Load(),
+					"sendReqs", sendBuffersCount.Swap(0),
+					"recvSize", receiveBuffers.Load(),
+					"recvReqs", recvBuffersCount.Swap(0))
 			}
 		}()
 	}
@@ -119,14 +121,17 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 
 	n := C.uint32_t(0)
 	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
-		subBuf := unsafe.Slice((*byte)(buffer.Buffer), buffer.Length)
-		var trueBuf []byte
+		var subBuf []byte
 		if rawConn.(MsQuicConn).useAppBuffers {
-			trueBuf = findBuffer(subBuf, &state.recvBuffers)
+			stream.state.bufferReleaseAccess.Lock()
+			subBuf = findBuffer(uintptr(unsafe.Pointer(buffer.Buffer)),
+				int(buffer.Length),
+				&state.recvBuffers)
+			stream.state.bufferReleaseAccess.Unlock()
 		} else {
-			trueBuf = subBuf
+			subBuf = unsafe.Slice((*byte)(buffer.Buffer), buffer.Length)
 		}
-		state.readBuffers.Write(trueBuf)
+		state.readBuffers.Write(subBuf)
 		n += buffer.Length
 	}
 	select {
@@ -134,15 +139,16 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	default:
 	}
 	if rawConn.(MsQuicConn).useAppBuffers {
-		state.recvCount.Add(uint32(n))
-		if state.needMoreBuffer() {
-			extraBuf := provideAppBuffer(stream)
-			if cAttachAppBuffer(stream.stream, extraBuf) == -1 {
-				cAbortStream(stream.stream)
+		stream.state.bufferReleaseAccess.Lock()
+		if state.needMoreBuffer() && stream.ctx.Err() == nil {
+			state.recvCount.Add(uint32(n))
+			err := provideAndAttachAppBuffer(s, stream)
+			if err != nil {
+				stream.state.bufferReleaseAccess.Unlock()
 				return 0
 			}
-			stream.state.recvTotal.Add(uint32(extraBuf.Length))
 		}
+		stream.state.bufferReleaseAccess.Unlock()
 	} else {
 		n = 0
 	}
@@ -173,12 +179,10 @@ func newStreamCallback(c, s C.HQUIC) {
 
 	if conn.useAppBuffers {
 		for range initBufs {
-			initBuf := provideAppBuffer(res)
-			if cAttachAppBuffer(s, initBuf) == -1 {
-				cAbortStream(s)
+			err := provideAndAttachAppBuffer(s, res)
+			if err != nil {
 				return
 			}
-			res.state.recvTotal.Add(uint32(initBuf.Length))
 		}
 	}
 
@@ -186,8 +190,22 @@ func newStreamCallback(c, s C.HQUIC) {
 	case conn.acceptStreamQueue <- res:
 		rawConn.(MsQuicConn).streams.Store(s, res)
 	default:
+		res.releaseBuffers()
 		cAbortStream(s)
 	}
+}
+
+var attachErr = errors.New("buffer attach error")
+
+func provideAndAttachAppBuffer(s C.HQUIC, res MsQuicStream) error {
+	initBuf := provideAppBuffer(res)
+	if cAttachAppBuffer(s, initBuf) == -1 {
+		res.releaseBuffers()
+		cAbortStream(s)
+		return attachErr
+	}
+	res.state.recvTotal.Add(uint32(initBuf.Length))
+	return nil
 }
 
 //export closePeerStreamCallback
@@ -314,6 +332,12 @@ func freeSendBuffer(c, s C.HQUIC, buffer *C.uint8_t) {
 		v.pinner.Unpin()
 		sendBuffersSize.Add(-1)
 	}
+
+	pinner, has := res.(MsQuicStream).state.sendPinBuffers.LoadAndDelete(idx)
+	if has {
+		v := pinner.(runtime.Pinner)
+		v.Unpin()
+	}
 }
 
 const bufferSize = 32 * 1024
@@ -336,6 +360,7 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 	pinner.Pin(sliceUnder)
 
 	receiveBuffers.Add(1)
+	recvBuffersCount.Add(1)
 	endAddr := uintptr(unsafe.Add(sliceUnder, len(goSlice)))
 
 	size := unsafe.Sizeof(C.QUIC_BUFFER{})

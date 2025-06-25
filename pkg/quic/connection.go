@@ -117,6 +117,12 @@ func (mqc MsQuicConn) appClose() error {
 	mqc.cancel()
 	mqc.openStream.Lock()
 	defer mqc.openStream.Unlock()
+	mqc.streams.Range(func(key, value any) bool {
+		if s, has := mqc.streams.LoadAndDelete(key); has {
+			s.(MsQuicStream).releaseBuffers()
+		}
+		return true
+	})
 	connections.Delete(mqc.conn)
 
 	return nil
