@@ -19,13 +19,13 @@ extern void newStreamCallback(HQUIC, HQUIC);
 extern uint32_t newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
-extern void closePeerStreamCallback(HQUIC,HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
 extern void freeSendBuffer(HQUIC, HQUIC, uint8_t *);
 extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
+extern void abortStreamCallback(HQUIC,HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -47,6 +47,7 @@ struct QUICConfig {
 
 int64_t
 StreamWrite(
+    _In_ HQUIC Connection,
     _In_ HQUIC Stream,
 	_In_ uint8_t *array,
 	_In_ int64_t len,
@@ -55,9 +56,8 @@ StreamWrite(
     )
 {
 	QUIC_BUFFER* SendBuffer = NULL;
-	char* SendBufferRaw = NULL;
 	if (noAlloc != 1) {
-		SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
+		char * SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
 		if (SendBufferRaw == NULL) {
 			printf("SendBuffer allocation failed!\n");
 			return -1;
@@ -75,13 +75,16 @@ StreamWrite(
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
         //printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
-		if (noAlloc != 1) {
-			free(SendBufferRaw);
-		}
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+		free(SendBuffer);
+		abortStreamCallback(Connection, Stream);
 		return -1;
     }
 	return len;
+}
+
+void
+AbortStream(HQUIC stream) {
+	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 }
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
@@ -98,8 +101,7 @@ StreamCallback(
     switch (Event->Type) {
 	case QUIC_STREAM_EVENT_START_COMPLETE:
 		if (QUIC_FAILED(Status = Event->START_COMPLETE.Status)) {
-			closePeerStreamCallback(Context, Stream);
-			MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+			abortStreamCallback(Context, Stream);
 		} else {
 			startStreamCallback(Context, Stream);
 		}
@@ -134,8 +136,7 @@ StreamCallback(
 		if (LOGS_ENABLED) {
 			printf("[strm][%p] Peer aborted\n", Stream);
 		}
-		closePeerStreamCallback(Context, Stream);
-        MsQuic->StreamShutdown(Stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
+		abortStreamCallback(Context, Stream);
         break;
     case QUIC_STREAM_EVENT_SHUTDOWN_COMPLETE:
         //
@@ -184,17 +185,6 @@ DatagramSendConnection(HQUIC connection, QUIC_BUFFER* buffer) {
 		return -1;
 	}
 	return 0;
-}
-
-void
-ShutdownStream(HQUIC stream) {
-	// This only shutdown sending part
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_GRACEFUL, 0);
-}
-
-void
-AbortStream(HQUIC stream) {
-	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 }
 
 HQUIC

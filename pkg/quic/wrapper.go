@@ -4,7 +4,6 @@ package quic
 
 #cgo pkg-config: msquic
 #cgo noescape ShutdownConnection
-#cgo noescape ShutdownStream
 #cgo noescape AbortStream
 #cgo noescape CreateStream
 #cgo noescape LoadListenConfiguration
@@ -17,7 +16,6 @@ package quic
 #cgo noescape GetRemoteAddr
 
 #cgo nocallback ShutdownConnection
-#cgo nocallback ShutdownStream
 #cgo nocallback AbortStream
 #cgo nocallback CreateStream
 #cgo nocallback LoadListenConfiguration
@@ -247,17 +245,12 @@ func cCloseListener(listener, config C.HQUIC) {
 	C.CloseListener(listener, config)
 }
 
-func cShutdownStream(s C.HQUIC) {
-	// Gracefully send and abort receive
-	C.ShutdownStream(s)
-}
-
 func cAbortStream(s C.HQUIC) {
 	C.AbortStream(s)
 }
 
-func cStreamWrite(s C.HQUIC, cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_t) C.int64_t {
-	return C.StreamWrite(s, cArray, size, noAlloc)
+func cStreamWrite(c, s C.HQUIC, cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_t) C.int64_t {
+	return C.StreamWrite(c, s, cArray, size, noAlloc)
 }
 
 func cCreateStream(c C.HQUIC, useAppBuffers C.int8_t) C.HQUIC {

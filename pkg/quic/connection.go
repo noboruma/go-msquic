@@ -118,7 +118,9 @@ func (mqc MsQuicConn) appClose() error {
 	mqc.openStream.Lock()
 	defer mqc.openStream.Unlock()
 	mqc.streams.Range(func(key, value any) bool {
+		println("PANIC Lingering stream")
 		if s, has := mqc.streams.LoadAndDelete(key); has {
+			s.(MsQuicStream).abortClose()
 			s.(MsQuicStream).releaseBuffers()
 		}
 		return true
@@ -144,7 +146,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
-	res := newMsQuicStream(stream, mqc.ctx, mqc.noAlloc, mqc.useAppBuffers)
+	res := newMsQuicStream(mqc.conn, stream, mqc.ctx, mqc.noAlloc, mqc.useAppBuffers)
 	_, loaded := mqc.streams.LoadOrStore(stream, res)
 	if loaded {
 		println("PANIC")
@@ -157,7 +159,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	if mqc.useAppBuffers {
 		for range initBufs {
 			initBuf := provideAppBuffer(res)
-			if cAttachAppBuffer(stream, initBuf) == -1 {
+			if initBuf == nil || cAttachAppBuffer(stream, initBuf) == -1 {
 				mqc.streams.Delete(stream)
 				res.releaseBuffers()
 				mqc.openStream.RUnlock()
@@ -176,8 +178,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	mqc.openStream.RUnlock()
 	if mqc.failOpenStream {
 		if !res.waitStart() {
-			mqc.streams.Delete(stream)
 			res.releaseBuffers()
+			mqc.streams.Delete(stream)
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}
 	}
