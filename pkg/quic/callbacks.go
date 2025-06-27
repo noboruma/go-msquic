@@ -39,7 +39,7 @@ func init() {
 					"recvSize", receiveBuffers.Load(),
 					"recvReqs", recvBuffersCount.Swap(0),
 					"pinSend", pinSend.Swap(0),
-					"pinRecv", pinRecv.Load())
+					"pinRecv", pinRecv.Swap(0))
 			}
 		}()
 	}
@@ -91,14 +91,14 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
-		cAbortConnection(c)
-		cAbortStream(s)
+		//cAbortConnection(c)
+		//cAbortStream(s)
 		return 0 // already closed
 	}
 	conn := rawConn.(MsQuicConn)
 	rawStream, has := conn.streams.Load(s)
 	if !has {
-		cAbortStream(s)
+		//cAbortStream(s)
 		return 0 // already closed
 	}
 
@@ -108,15 +108,21 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	n := C.uint32_t(0)
 	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
 		var subBuf []byte
+		stream.state.bufferReleaseAccess.RLock()
 		if conn.useAppBuffers {
 			subBuf = findBuffer(uintptr(unsafe.Pointer(buffer.Buffer)),
 				int(buffer.Length),
 				&state.recvBuffers)
+			if subBuf == nil {
+				stream.state.bufferReleaseAccess.RUnlock()
+				break
+			}
 		} else {
 			subBuf = unsafe.Slice((*byte)(buffer.Buffer), buffer.Length)
 		}
-		state.readBuffers.Write(subBuf)
 		n += buffer.Length
+		state.readBuffers.Write(subBuf)
+		stream.state.bufferReleaseAccess.RUnlock()
 	}
 	select {
 	case stream.readSignal <- struct{}{}:
@@ -145,7 +151,7 @@ func newStreamCallback(c, s C.HQUIC) {
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
-		cAbortConnection(c)
+		//cAbortConnection(c)
 		cAbortStream(s)
 		return // already closed
 	}
@@ -199,14 +205,14 @@ func closeStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC already closed connection")
-		cAbortConnection(c)
-		cAbortStream(s)
+		//cAbortConnection(c)
+		//cAbortStream(s)
 		return // already closed
 	}
 
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
-		cAbortStream(s)
+		//cAbortStream(s)
 		return // already closed
 	}
 
@@ -226,8 +232,8 @@ func abortStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC already closed connection 2")
-		cAbortConnection(c)
-		cAbortStream(s)
+		//cAbortConnection(c)
+		//cAbortStream(s)
 		return // already closed
 	}
 
@@ -235,7 +241,7 @@ func abortStreamCallback(c, s C.HQUIC) {
 	res, has := conn.streams.Load(s)
 	if !has {
 		println("PANIC cannot find stream to abort")
-		cAbortStream(s)
+		//cAbortStream(s)
 		return // already closed
 	}
 
@@ -298,19 +304,17 @@ func startConnectionCallback(c C.HQUIC) {
 
 //export freeSendBuffer
 func freeSendBuffer(c, s C.HQUIC, buffer *C.uint8_t) {
-	pinSend.Add(1)
-
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for free send")
-		cAbortConnection(c)
-		cAbortStream(s)
+		//cAbortConnection(c)
+		//cAbortStream(s)
 		return // already closed
 	}
 	res, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		println("PANIC cannot find stream to release")
-		cAbortStream(s)
+		//cAbortStream(s)
 		return // already closed
 	}
 
@@ -358,8 +362,6 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 	pinner.Pin(res)
 	res.Buffer = (*C.uint8_t)(sliceUnder)
 	res.Length = C.uint32_t(len(goSlice))
-
-	pinRecv.Add(1)
 
 	s.state.recvBuffers.Store(endAddr, recvBuffer{
 		goBuffer: goSlicePool,

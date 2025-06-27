@@ -69,9 +69,11 @@ func findBuffer(current uintptr, length int, buffers *sync.Map) []byte {
 		return true
 	})
 	if buffer != nil {
+		pinRecv.Add(1)
 		return buffer[offsetStart : offsetStart+length]
 	}
-	println("buffer never found!")
+	//println("buffer never found!")
+	pinSend.Add(1)
 	return buffer
 }
 
@@ -111,7 +113,6 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 				bufferPool.Put(b.goBuffer)
 				C.free(unsafe.Pointer(b.cBuffer))
 				receiveBuffers.Add(-1)
-				pinRecv.Add(-1)
 			}
 		}
 	}
@@ -502,7 +503,6 @@ func (res MsQuicStream) releaseBuffers() {
 			bufferPool.Put(v.goBuffer)
 			C.free(unsafe.Pointer(v.cBuffer))
 			receiveBuffers.Add(-1)
-			pinRecv.Add(-1)
 		}
 		return true
 	})
