@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -30,10 +31,12 @@ type Stream interface {
 }
 
 type ChainedBuffers struct {
-	current     *ChainedBuffer
-	tail        *ChainedBuffer
-	copy        bool
-	recvBuffers *sync.Map
+	current         *ChainedBuffer
+	tail            *ChainedBuffer
+	copy            bool
+	readAccess      *sync.RWMutex
+	ctx             context.Context
+	attachedBuffers *attachedBuffers
 }
 
 func (cbs *ChainedBuffers) HasData() bool {
@@ -52,27 +55,26 @@ func (cbs *ChainedBuffers) Write(batch []byte) {
 	cbs.tail = &next
 }
 
-func findBuffer(current uintptr, length int, buffers *sync.Map) []byte {
-	//currentEnd := unsafe.Add(current, len(subBuf))
+func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 	var buffer []byte
 	var offsetStart int
-	buffers.Range(func(key, value any) bool {
-		tmp := value.(recvBuffer)
-		goBuffer := *tmp.goBuffer
-		start := unsafe.Pointer(unsafe.SliceData(goBuffer))
-		end := unsafe.Add(start, len(goBuffer))
+	buffers.access.RLock()
+	defer buffers.access.RUnlock()
+	for _, buf := range buffers.buffers {
+		start := buf.start
+		end := buf.end
 		if uintptr(current) >= uintptr(start) && uintptr(current) < uintptr(end) {
-			buffer = goBuffer
-			offsetStart = int(uintptr(current) - uintptr(start))
-			return false
+			if rBuffer, has := recvBuffers.Load(end); has {
+				buffer = *rBuffer.(recvBuffer).goBuffer
+				offsetStart = int(uintptr(current) - uintptr(start))
+			}
+			break
 		}
-		return true
-	})
+	}
 	if buffer != nil {
 		pinRecv.Add(1)
 		return buffer[offsetStart : offsetStart+length]
 	}
-	//println("buffer never found!")
 	pinSend.Add(1)
 	return buffer
 }
@@ -85,6 +87,11 @@ func sliceEnd(subBuf []byte) uintptr {
 
 func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 	n := 0
+	cbs.readAccess.RLock()
+	defer cbs.readAccess.RUnlock()
+	if cbs.ctx.Err() != nil {
+		return 0, io.EOF
+	}
 	for {
 		if cbs.current.empty.Load() {
 			next := cbs.current.next.Swap(nil)
@@ -107,13 +114,19 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 		cbs.current.empty.Store(true)
 		if !cbs.copy {
 			end := sliceEnd(cbs.current.noCopyReadBuffer)
-			if buf, has := cbs.recvBuffers.LoadAndDelete(end); has {
+			if buf, has := recvBuffers.LoadAndDelete(end); has {
 				b := buf.(recvBuffer)
 				b.pinner.Unpin()
 				bufferPool.Put(b.goBuffer)
 				C.free(unsafe.Pointer(b.cBuffer))
 				receiveBuffers.Add(-1)
+				cbs.attachedBuffers.access.Lock()
+				cbs.attachedBuffers.buffers = slices.DeleteFunc(cbs.attachedBuffers.buffers, func(b sliceAddresses) bool {
+					return b.end == end
+				})
+				cbs.attachedBuffers.access.Unlock()
 			}
+
 		}
 	}
 	return n, nil
@@ -150,18 +163,27 @@ type sendBuffer struct {
 type streamState struct {
 	readBuffers   ChainedBuffers
 	writeDeadline time.Time
-	writeAccess   sync.Mutex
+	writeAccess   sync.RWMutex
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
 	recvCount     atomic.Uint32
 	recvTotal     atomic.Uint32
 
+	readAccess          sync.RWMutex
 	readDeadlineContext context.Context
 	readDeadlineCancel  context.CancelFunc
 
-	bufferReleaseAccess sync.RWMutex
-	recvBuffers         sync.Map //map[uintptr]recvBuffer
-	sendBuffers         sync.Map //map[uintptr]sendBuffer
+	attachedRecvBuffers attachedBuffers
+}
+
+type attachedBuffers struct {
+	access  sync.RWMutex
+	buffers []sliceAddresses
+}
+
+type sliceAddresses struct {
+	start uintptr
+	end   uintptr
 }
 
 func (ss *streamState) needMoreBuffer() bool {
@@ -196,13 +218,18 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 			writeDeadline:       time.Time{},
 			shutdown:            atomic.Bool{},
 			startSignal:         make(chan struct{}, 1),
+			attachedRecvBuffers: attachedBuffers{
+				buffers: []sliceAddresses{},
+			},
 		},
 		readSignal: make(chan struct{}, 1),
 		noAlloc:    noAlloc,
 	}
 	res.state.readBuffers.current = &ChainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
-	res.state.readBuffers.recvBuffers = &res.state.recvBuffers
+	res.state.readBuffers.ctx = ctx
+	res.state.readBuffers.readAccess = &res.state.readAccess
+	res.state.readBuffers.attachedBuffers = &res.state.attachedRecvBuffers
 	return res
 }
 
@@ -260,20 +287,20 @@ var recvBuffersCount atomic.Int64
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	if !mqs.noAlloc {
-		return mqs.copyLessWrite(data)
+		return mqs.cCopyWrite(data)
 	}
-	return mqs.copyWrite(data)
+	return mqs.goCopyWrite(data)
 }
 
-func (mqs MsQuicStream) copyWrite(data []byte) (int, error) {
+func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 	now := time.Now()
 	defer func() {
 		time9.Add(time.Since(now).Milliseconds())
 	}()
 	state := mqs.state
-	state.writeAccess.Lock()
-	defer state.writeAccess.Unlock()
 	ctx := mqs.ctx
+	mqs.state.writeAccess.RLock()
+	defer mqs.state.writeAccess.RUnlock()
 	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -289,26 +316,11 @@ func (mqs MsQuicStream) copyWrite(data []byte) (int, error) {
 		bufNum += 1
 	}
 	for range bufNum {
-		buf := bufferPool.Get().(*[]byte)
-		buffer := *buf
-		pinner := runtime.Pinner{}
-		m := copy(buffer, data[n:])
-		pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
-		idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
-		mqs.state.bufferReleaseAccess.RLock()
-		if mqs.ctx.Err() == nil {
-			mqs.state.sendBuffers.Store(idx, sendBuffer{
-				goBuffer: buf,
-				pinner:   pinner,
-			})
-			sendBuffersSize.Add(1)
-			sendBuffersCount.Add(1)
-		} else {
-			mqs.state.bufferReleaseAccess.RUnlock()
-			mqs.releaseBuffers()
-			return int(n), io.ErrUnexpectedEOF
+		buffer := mqs.attachSendBuffer()
+		if buffer == nil {
+			return int(n), ctx.Err()
 		}
-		mqs.state.bufferReleaseAccess.RUnlock()
+		m := copy(buffer, data[n:])
 		sendBuffersCount.Add(1)
 		cNoAlloc := C.uint8_t(1)
 		nn := cStreamWrite(mqs.conn, mqs.stream,
@@ -316,7 +328,7 @@ func (mqs MsQuicStream) copyWrite(data []byte) (int, error) {
 			C.int64_t(m),
 			cNoAlloc)
 		if nn == -1 {
-			mqs.releaseBuffers()
+			mqs.detachSendBuffer(buffer)
 			return int(n), fmt.Errorf("write stream error %v", len(data))
 		}
 		n += nn
@@ -325,17 +337,15 @@ func (mqs MsQuicStream) copyWrite(data []byte) (int, error) {
 	return int(n), nil
 }
 
-// copyLessWrite is exclusively used by ReadFrom
-// We optimize away the extra copy needed when we skip C alloc
-func (mqs MsQuicStream) copyLessWrite(data []byte) (int, error) {
+func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 	now := time.Now()
 	defer func() {
 		time9.Add(time.Since(now).Milliseconds())
 	}()
 	state := mqs.state
-	state.writeAccess.Lock()
-	defer state.writeAccess.Unlock()
 	ctx := mqs.ctx
+	mqs.state.writeAccess.RLock()
+	defer mqs.state.writeAccess.RUnlock()
 	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -348,6 +358,38 @@ func (mqs MsQuicStream) copyLessWrite(data []byte) (int, error) {
 	var n C.int64_t
 	cNoAlloc := C.uint8_t(0)
 	n = cStreamWrite(mqs.conn, mqs.stream,
+		(*C.uint8_t)(unsafe.SliceData(data[:])),
+		C.int64_t(len(data)),
+		cNoAlloc)
+	if n == -1 {
+		return int(n), fmt.Errorf("write stream error %v", len(data))
+	}
+	runtime.KeepAlive(data)
+	return int(n), nil
+}
+
+// copyLessWrite is exclusively used by ReadFrom
+// We optimize away the extra copy needed when we skip C alloc
+func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
+	now := time.Now()
+	defer func() {
+		time9.Add(time.Since(now).Milliseconds())
+	}()
+	state := mqs.state
+	ctx := mqs.ctx
+	mqs.state.writeAccess.RLock()
+	defer mqs.state.writeAccess.RUnlock()
+	if ctx.Err() != nil {
+		return 0, io.EOF
+	}
+	deadline := state.writeDeadline
+	if !deadline.IsZero() {
+		if time.Now().After(deadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
+	}
+	cNoAlloc := C.uint8_t(1)
+	n := cStreamWrite(mqs.conn, mqs.stream,
 		(*C.uint8_t)(unsafe.SliceData(data[:])),
 		C.int64_t(len(data)),
 		cNoAlloc)
@@ -390,25 +432,30 @@ func (mqs MsQuicStream) Context() context.Context {
 // Close is a definitive operation
 // The stream cannot be receive anything after that call
 func (mqs MsQuicStream) Close() error {
-	mqs.state.writeAccess.Lock()
-	defer mqs.state.writeAccess.Unlock()
 	return mqs.abortClose()
 }
 
-func (mqs MsQuicStream) appClose() error {
+func (mqs MsQuicStream) release() error {
 	mqs.state.shutdown.Store(true)
 	mqs.cancel()
 	mqs.state.writeAccess.Lock()
-	defer mqs.state.writeAccess.Unlock()
+	mqs.state.writeAccess.Unlock()
+	mqs.state.readAccess.Lock()
+	mqs.state.readAccess.Unlock()
+
 	mqs.releaseBuffers()
+
 	return nil
 }
 
 func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.cancel()
+		mqs.state.writeAccess.Lock()
+		mqs.state.writeAccess.Unlock()
+		mqs.state.readAccess.Lock()
+		mqs.state.readAccess.Unlock()
 		cAbortStream(mqs.stream)
-		mqs.releaseBuffers()
 	}
 	return nil
 }
@@ -447,7 +494,7 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
 			var nn int
-			nn, err = mqs.copyLessWrite(buffer[:bn])
+			nn, err = mqs.cCopyWrite(buffer[:bn])
 			n += int64(nn)
 		}
 		if err != nil {
@@ -455,65 +502,72 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 		}
 	}
 	return n, io.EOF
+}
+
+func (mqs MsQuicStream) attachSendBuffer() []byte {
+	buf := bufferPool.Get().(*[]byte)
+	buffer := *buf
+	pinner := runtime.Pinner{}
+	pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
+	idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+	sendBuffers.Store(idx, sendBuffer{
+		goBuffer: buf,
+		pinner:   pinner,
+	})
+	sendBuffersSize.Add(1)
+	sendBuffersCount.Add(1)
+	return buffer
+}
+
+func (mqs MsQuicStream) detachSendBuffer(data []byte) {
+	idx := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
+	if sBuffer, has := sendBuffers.LoadAndDelete(idx); has {
+		v := sBuffer.(sendBuffer)
+		v.pinner.Unpin()
+		bufferPool.Put(v.goBuffer)
+		sendBuffersSize.Add(-1)
+	}
 }
 
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	for mqs.ctx.Err() == nil {
-		buf := bufferPool.Get().(*[]byte)
-		buffer := *buf
-		pinner := runtime.Pinner{}
-		pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
-		idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
-		mqs.state.bufferReleaseAccess.RLock()
-		if mqs.ctx.Err() == nil {
-			mqs.state.sendBuffers.Store(idx, sendBuffer{
-				goBuffer: buf,
-				pinner:   pinner,
-			})
-			sendBuffersSize.Add(1)
-			sendBuffersCount.Add(1)
-		} else {
-			mqs.state.bufferReleaseAccess.RUnlock()
-			mqs.releaseBuffers()
-			return n, err
-		}
-		mqs.state.bufferReleaseAccess.RUnlock()
+		buffer := mqs.attachSendBuffer()
 		bn, err := r.Read(buffer[:])
 		if bn != 0 && err == nil {
 			var nn int
-			nn, err = mqs.copyLessWrite(buffer[:bn])
+			nn, err = mqs.noCopyWrite(buffer[:bn])
 			n += int64(nn)
 		}
 		if err != nil {
-			mqs.releaseBuffers()
+			mqs.detachSendBuffer(buffer)
 			return n, err
 		}
 	}
 	return n, io.EOF
 }
 
-func (res MsQuicStream) releaseBuffers() {
-	res.state.bufferReleaseAccess.Lock()
-	defer res.state.bufferReleaseAccess.Unlock()
+var sendBuffers sync.Map //map[uintptr]sendBuffer
+var recvBuffers sync.Map //map[uintptr]recvBuffer
 
-	res.state.recvBuffers.Range(func(key, _ any) bool {
-		if value, has := res.state.recvBuffers.LoadAndDelete(key); has {
+func (res MsQuicStream) releaseBuffers() {
+
+	res.state.attachedRecvBuffers.access.Lock()
+	defer res.state.attachedRecvBuffers.access.Unlock()
+	for _, buf := range res.state.attachedRecvBuffers.buffers {
+		if value, has := recvBuffers.LoadAndDelete(buf.end); has {
 			v := value.(recvBuffer)
 			v.pinner.Unpin()
 			bufferPool.Put(v.goBuffer)
 			C.free(unsafe.Pointer(v.cBuffer))
 			receiveBuffers.Add(-1)
 		}
-		return true
-	})
+	}
 
-	res.state.sendBuffers.Range(func(key, _ any) bool {
-		if value, has := res.state.sendBuffers.LoadAndDelete(key); has {
-			v := value.(sendBuffer)
-			v.pinner.Unpin()
-			bufferPool.Put(v.goBuffer)
-			sendBuffersSize.Add(-1)
-		}
-		return true
-	})
+	//res.state.sendBuffers.Range(func(key, _ any) bool {
+	//	if value, has := res.state.sendBuffers.LoadAndDelete(key); has {
+	//		println("INFO moving to lingering")
+	//		lingeringSends.Store(key, value)
+	//	}
+	//	return true
+	//})
 }

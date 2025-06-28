@@ -26,7 +26,6 @@ package quic
 #cgo nocallback StartConnection
 #cgo nocallback MsQuicSetup
 #cgo nocallback GetRemoteAddr
-#cgo nocallback StreamWrite
 #cgo nocallback AttachAppBuffer
 
 #include "c/msquic.c"

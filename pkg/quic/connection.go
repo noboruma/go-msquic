@@ -94,10 +94,10 @@ func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 }
 
 func (mqc MsQuicConn) Close() error {
-	mqc.openStream.Lock()
-	defer mqc.openStream.Unlock()
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
+		mqc.openStream.Lock()
+		defer mqc.openStream.Unlock()
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
@@ -106,8 +106,8 @@ func (mqc MsQuicConn) Close() error {
 func (mqc MsQuicConn) peerClose() error {
 	if !mqc.shutdown.Swap(true) {
 		mqc.cancel()
-		//mqc.openStream.Lock()
-		//defer mqc.openStream.Unlock()
+		mqc.openStream.Lock()
+		defer mqc.openStream.Unlock()
 	}
 	return nil
 }
@@ -121,7 +121,6 @@ func (mqc MsQuicConn) appClose() error {
 		println("PANIC Lingering stream")
 		if s, has := mqc.streams.LoadAndDelete(key); has {
 			s.(MsQuicStream).abortClose()
-			s.(MsQuicStream).releaseBuffers()
 		}
 		return true
 	})

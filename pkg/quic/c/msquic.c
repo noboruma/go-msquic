@@ -23,7 +23,7 @@ extern void closeStreamCallback(HQUIC,HQUIC);
 extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
-extern void freeSendBuffer(HQUIC, HQUIC, uint8_t *);
+extern void freeSendBuffer(uint8_t *);
 extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
 extern void abortStreamCallback(HQUIC,HQUIC);
 
@@ -59,7 +59,7 @@ StreamWrite(
 	if (noAlloc != 1) {
 		char * SendBufferRaw = malloc(sizeof(QUIC_BUFFER) + len);
 		if (SendBufferRaw == NULL) {
-			printf("SendBuffer allocation failed!\n");
+			printf("SendBufferRaw allocation failed!\n");
 			return -1;
 		}
 		SendBuffer = (QUIC_BUFFER*)SendBufferRaw;
@@ -68,13 +68,16 @@ StreamWrite(
 		SendBuffer->Length = len;
 	} else {
 		SendBuffer = malloc(sizeof(QUIC_BUFFER));
+		if (SendBuffer == NULL) {
+			printf("SendBuffer allocation failed!\n");
+			return -1;
+		}
 		SendBuffer->Buffer = array;
 		SendBuffer->Length = len;
 	}
 
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
-        //printf("[%p]StreamSend failed, 0x%x!\n", Stream, Status);
 		free(SendBuffer);
 		abortStreamCallback(Connection, Stream);
 		return -1;
@@ -108,7 +111,7 @@ StreamCallback(
 		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
 		if  (Event->SEND_COMPLETE.ClientContext) {
-			freeSendBuffer(Context, Stream, ((QUIC_BUFFER*)Event->SEND_COMPLETE.ClientContext)->Buffer);
+			freeSendBuffer(((QUIC_BUFFER*)Event->SEND_COMPLETE.ClientContext)->Buffer);
 			free(Event->SEND_COMPLETE.ClientContext);
 		}
 		if (LOGS_ENABLED) {
