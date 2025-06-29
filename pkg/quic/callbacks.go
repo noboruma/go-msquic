@@ -250,6 +250,23 @@ func abortStreamCallback(c, s C.HQUIC) {
 	res.(MsQuicStream).abortClose()
 }
 
+//export shutConnectionCallback
+func shutConnectionCallback(c C.HQUIC) {
+	now := time.Now()
+
+	defer func() {
+		time6.Add(time.Since(now).Milliseconds())
+	}()
+	rawConn, has := connections.Load(c)
+	if !has {
+		println("PANIC already closed connection 3")
+		return // already closed
+	}
+
+	conn := rawConn.(MsQuicConn)
+	conn.Close()
+}
+
 //export startStreamCallback
 func startStreamCallback(c, s C.HQUIC) {
 
@@ -261,15 +278,15 @@ func startStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for start stream")
-		cAbortConnection(c)
-		cAbortStream(s)
+		//cAbortConnection(c)
+		//cAbortStream(s)
 		return // already closed
 	}
 
 	res, has := rawConn.(MsQuicConn).streams.Load(s)
 	if !has {
 		println("PANIC no stream for start stream")
-		cAbortStream(s)
+		//cAbortStream(s)
 		return // already closed
 	}
 
@@ -290,7 +307,7 @@ func startConnectionCallback(c C.HQUIC) {
 	res, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for start conn")
-		cAbortConnection(c)
+		//cAbortConnection(c)
 		return // already closed
 	}
 
@@ -362,7 +379,6 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 func newDatagramCallback(c C.HQUIC, recvBuffer *C.QUIC_BUFFER) {
 	rawConn, has := connections.Load(c)
 	if !has {
-		cAbortConnection(c)
 		return // already closed
 	}
 
@@ -385,7 +401,7 @@ func closePeerConnectionCallback(c C.HQUIC) {
 	res, has := connections.Load(c)
 
 	if !has {
-		cAbortConnection(c)
+		//cAbortConnection(c)
 		return // already closed
 	}
 

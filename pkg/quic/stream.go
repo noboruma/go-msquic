@@ -71,7 +71,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 			break
 		}
 	}
-	if buffer != nil {
+	if buffer != nil && offsetStart+length <= len(buffer) {
 		pinRecv.Add(1)
 		return buffer[offsetStart : offsetStart+length]
 	}
@@ -451,10 +451,6 @@ func (mqs MsQuicStream) release() error {
 func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.cancel()
-		mqs.state.writeAccess.Lock()
-		mqs.state.writeAccess.Unlock()
-		mqs.state.readAccess.Lock()
-		mqs.state.readAccess.Unlock()
 		cAbortStream(mqs.stream)
 	}
 	return nil
@@ -562,6 +558,7 @@ func (res MsQuicStream) releaseBuffers() {
 			receiveBuffers.Add(-1)
 		}
 	}
+	res.state.attachedRecvBuffers.buffers = nil
 
 	//res.state.sendBuffers.Range(func(key, _ any) bool {
 	//	if value, has := res.state.sendBuffers.LoadAndDelete(key); has {

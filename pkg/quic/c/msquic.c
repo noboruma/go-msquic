@@ -26,6 +26,7 @@ extern void startConnectionCallback(HQUIC);
 extern void freeSendBuffer(uint8_t *);
 extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
 extern void abortStreamCallback(HQUIC,HQUIC);
+extern void shutConnectionCallback(HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -332,7 +333,7 @@ ListenerCallback(
 		Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection, (HQUIC)Context);
 		if (QUIC_FAILED(Status)) {
 			printf("[conn][%p] new connection failed\n", Event->NEW_CONNECTION.Connection);
-			MsQuic->ConnectionShutdown(Event->NEW_CONNECTION.Connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
+			shutConnectionCallback(Event->NEW_CONNECTION.Connection);
 		}
         break;
     default:
