@@ -60,10 +60,11 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 	var offsetStart int
 	buffers.access.RLock()
 	defer buffers.access.RUnlock()
+	currentEnd := current + uintptr(length)
 	for _, buf := range buffers.buffers {
 		start := buf.start
 		end := buf.end
-		if uintptr(current) >= uintptr(start) && uintptr(current) < uintptr(end) {
+		if current >= start && current < end && currentEnd > start && currentEnd <= end {
 			if rBuffer, has := recvBuffers.Load(end); has {
 				buffer = *rBuffer.(recvBuffer).goBuffer
 				offsetStart = int(uintptr(current) - uintptr(start))
@@ -71,7 +72,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 			break
 		}
 	}
-	if buffer != nil && offsetStart+length <= len(buffer) {
+	if buffer != nil {
 		pinRecv.Add(1)
 		return buffer[offsetStart : offsetStart+length]
 	}
@@ -114,22 +115,28 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 		cbs.current.empty.Store(true)
 		if !cbs.copy {
 			end := sliceEnd(cbs.current.noCopyReadBuffer)
-			if buf, has := recvBuffers.LoadAndDelete(end); has {
-				b := buf.(recvBuffer)
-				b.pinner.Unpin()
-				bufferPool.Put(b.goBuffer)
-				C.free(unsafe.Pointer(b.cBuffer))
-				receiveBuffers.Add(-1)
+			if freeRecvBuffer(end) {
 				cbs.attachedBuffers.access.Lock()
 				cbs.attachedBuffers.buffers = slices.DeleteFunc(cbs.attachedBuffers.buffers, func(b sliceAddresses) bool {
 					return b.end == end
 				})
 				cbs.attachedBuffers.access.Unlock()
 			}
-
 		}
 	}
 	return n, nil
+}
+
+func freeRecvBuffer(end uintptr) bool {
+	if buf, has := recvBuffers.LoadAndDelete(end); has {
+		b := buf.(recvBuffer)
+		b.pinner.Unpin()
+		bufferPool.Put(b.goBuffer)
+		C.free(unsafe.Pointer(b.cBuffer))
+		receiveBuffers.Add(-1)
+		return true
+	}
+	return false
 }
 
 type ChainedBuffer struct {
@@ -174,6 +181,8 @@ type streamState struct {
 	readDeadlineCancel  context.CancelFunc
 
 	attachedRecvBuffers attachedBuffers
+
+	closingAccess sync.Mutex
 }
 
 type attachedBuffers struct {
@@ -316,10 +325,7 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		bufNum += 1
 	}
 	for range bufNum {
-		buffer := mqs.attachSendBuffer()
-		if buffer == nil {
-			return int(n), ctx.Err()
-		}
+		buffer := getSendBuffer()
 		m := copy(buffer, data[n:])
 		sendBuffersCount.Add(1)
 		cNoAlloc := C.uint8_t(1)
@@ -328,7 +334,8 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 			C.int64_t(m),
 			cNoAlloc)
 		if nn == -1 {
-			mqs.detachSendBuffer(buffer)
+			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+			releaseSendBuffer(idx)
 			return int(n), fmt.Errorf("write stream error %v", len(data))
 		}
 		n += nn
@@ -436,19 +443,26 @@ func (mqs MsQuicStream) Close() error {
 }
 
 func (mqs MsQuicStream) release() error {
+	mqs.state.closingAccess.Lock()
+	defer mqs.state.closingAccess.Unlock()
 	mqs.state.shutdown.Store(true)
 	mqs.cancel()
-	mqs.state.writeAccess.Lock()
-	mqs.state.writeAccess.Unlock()
-	mqs.state.readAccess.Lock()
-	mqs.state.readAccess.Unlock()
-
+	mqs.operationsBarrier()
 	mqs.releaseBuffers()
 
 	return nil
 }
 
+func (mqs MsQuicStream) operationsBarrier() {
+	mqs.state.writeAccess.Lock()
+	mqs.state.writeAccess.Unlock()
+	mqs.state.readAccess.Lock()
+	mqs.state.readAccess.Unlock()
+}
+
 func (mqs MsQuicStream) abortClose() error {
+	mqs.state.closingAccess.Lock()
+	defer mqs.state.closingAccess.Unlock()
 	if !mqs.state.shutdown.Swap(true) {
 		mqs.cancel()
 		cAbortStream(mqs.stream)
@@ -500,8 +514,8 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 	return n, io.EOF
 }
 
-func (mqs MsQuicStream) attachSendBuffer() []byte {
-	buf := bufferPool.Get().(*[]byte)
+func getSendBuffer() []byte {
+	buf := smallBufferPool.Get().(*[]byte)
 	buffer := *buf
 	pinner := runtime.Pinner{}
 	pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
@@ -515,19 +529,20 @@ func (mqs MsQuicStream) attachSendBuffer() []byte {
 	return buffer
 }
 
-func (mqs MsQuicStream) detachSendBuffer(data []byte) {
-	idx := uintptr(unsafe.Pointer(unsafe.SliceData(data)))
+func releaseSendBuffer(idx uintptr) {
 	if sBuffer, has := sendBuffers.LoadAndDelete(idx); has {
 		v := sBuffer.(sendBuffer)
 		v.pinner.Unpin()
-		bufferPool.Put(v.goBuffer)
+		smallBufferPool.Put(v.goBuffer)
 		sendBuffersSize.Add(-1)
+	} else {
+		println("PANIC no buffer to free")
 	}
 }
 
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	for mqs.ctx.Err() == nil {
-		buffer := mqs.attachSendBuffer()
+		buffer := getSendBuffer()
 		bn, err := r.Read(buffer[:])
 		if bn != 0 && err == nil {
 			var nn int
@@ -535,7 +550,8 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 			n += int64(nn)
 		}
 		if err != nil {
-			mqs.detachSendBuffer(buffer)
+			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+			releaseSendBuffer(idx)
 			return n, err
 		}
 	}
@@ -550,13 +566,7 @@ func (res MsQuicStream) releaseBuffers() {
 	res.state.attachedRecvBuffers.access.Lock()
 	defer res.state.attachedRecvBuffers.access.Unlock()
 	for _, buf := range res.state.attachedRecvBuffers.buffers {
-		if value, has := recvBuffers.LoadAndDelete(buf.end); has {
-			v := value.(recvBuffer)
-			v.pinner.Unpin()
-			bufferPool.Put(v.goBuffer)
-			C.free(unsafe.Pointer(v.cBuffer))
-			receiveBuffers.Add(-1)
-		}
+		freeRecvBuffer(buf.end)
 	}
 	res.state.attachedRecvBuffers.buffers = nil
 

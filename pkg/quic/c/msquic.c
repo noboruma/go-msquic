@@ -108,10 +108,10 @@ StreamCallback(
 	QUIC_STATUS Status;
     switch (Event->Type) {
 	case QUIC_STREAM_EVENT_START_COMPLETE:
-		if (QUIC_FAILED(Status = Event->START_COMPLETE.Status)) {
-			abortStreamCallback(Context, Stream);
-		} else {
+		if (Event->START_COMPLETE.Status == QUIC_STATUS_SUCCESS) {
 			startStreamCallback(Context, Stream);
+		} else {
+			abortStreamCallback(Context, Stream);
 		}
 		break;
     case QUIC_STREAM_EVENT_SEND_COMPLETE:
@@ -284,7 +284,6 @@ ConnectionCallback(
 			printf("[conn][%p] Shut down by peer, 0x%llu\n", Connection, (unsigned long long)Event->SHUTDOWN_INITIATED_BY_PEER.ErrorCode);
 		}
 		closePeerConnectionCallback(Connection);
-        //MsQuic->ConnectionShutdown(Connection, QUIC_CONNECTION_SHUTDOWN_FLAG_NONE, 0);
         break;
     case QUIC_CONNECTION_EVENT_SHUTDOWN_COMPLETE:
 		if (LOGS_ENABLED) {

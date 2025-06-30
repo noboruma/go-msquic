@@ -121,6 +121,7 @@ func (mqc MsQuicConn) appClose() error {
 		println("PANIC Lingering stream")
 		if s, has := mqc.streams.LoadAndDelete(key); has {
 			s.(MsQuicStream).abortClose()
+			s.(MsQuicStream).operationsBarrier()
 		}
 		return true
 	})
@@ -131,9 +132,9 @@ func (mqc MsQuicConn) appClose() error {
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	mqc.openStream.RLock()
+	defer mqc.openStream.RUnlock()
 
 	if mqc.ctx.Err() != nil {
-		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("closed connection")
 	}
 	useAppBuffers := C.int8_t(0)
@@ -142,7 +143,6 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 	stream := cCreateStream(mqc.conn, useAppBuffers)
 	if stream == nil {
-		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
 	res := newMsQuicStream(mqc.conn, stream, mqc.ctx, mqc.noAlloc, mqc.useAppBuffers)
@@ -162,7 +162,6 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 				mqc.streams.Delete(stream)
 				res.releaseBuffers()
 				cFreeStream(stream)
-				mqc.openStream.RUnlock()
 				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
 			}
 			res.state.recvTotal.Add(uint32(initBuf.Length))
@@ -175,18 +174,18 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 			res.releaseBuffers()
 			cFreeStream(stream)
 		}
-		mqc.openStream.RUnlock()
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
-	mqc.openStream.RUnlock()
 	if mqc.failOpenStream {
 		if !res.waitStart() {
 			//res.releaseBuffers()
 			//mqc.streams.Delete(stream)
 			//cFreeStream(stream)
+			startFail.Add(1)
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}
 	}
+	startSucc.Add(1)
 	return res, nil
 }
 

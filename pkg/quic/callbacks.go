@@ -14,7 +14,7 @@ import (
 // #include "inc/msquic.h"
 import "C"
 
-var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, pinSend, pinRecv atomic.Int64
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, pinSend, pinRecv, startSucc, startFail atomic.Int64
 
 func init() {
 	if os.Getenv("QUIC_DEBUG") != "" {
@@ -39,7 +39,9 @@ func init() {
 					"recvSize", receiveBuffers.Load(),
 					"recvReqs", recvBuffersCount.Swap(0),
 					"pinSend", pinSend.Swap(0),
-					"pinRecv", pinRecv.Swap(0))
+					"pinRecv", pinRecv.Swap(0),
+					"startSucc", startSucc.Swap(0),
+					"startFail", startFail.Swap(0))
 			}
 		}()
 	}
@@ -53,6 +55,7 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	}()
 	listener, has := listeners.Load(l)
 	if !has {
+		println("PANIC new no listener")
 		return // already closed
 	}
 	res := newMsQuicConn(c,
@@ -65,6 +68,7 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 		connections.Store(c, res)
 	default:
 		cAbortConnection(c)
+		println("WARNING rejecting connection")
 	}
 }
 
@@ -76,6 +80,7 @@ func closeConnectionCallback(c C.HQUIC) {
 	}()
 	res, has := connections.Load(c)
 	if !has {
+		println("PANIC close conn no conn")
 		return // already closed
 	}
 
@@ -91,6 +96,7 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
+		println("PANIC new read stream no conn")
 		//cAbortConnection(c)
 		//cAbortStream(s)
 		return 0 // already closed
@@ -99,6 +105,7 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	rawStream, has := conn.streams.Load(s)
 	if !has {
 		//cAbortStream(s)
+		println("PANIC new read stream no stream")
 		return 0 // already closed
 	}
 
@@ -155,6 +162,7 @@ func newStreamCallback(c, s C.HQUIC) {
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
+		println("PANIC new stream no conn")
 		//cAbortConnection(c)
 		cAbortStream(s)
 		return // already closed
@@ -163,6 +171,7 @@ func newStreamCallback(c, s C.HQUIC) {
 	conn.openStream.RLock()
 	defer conn.openStream.RUnlock()
 	if conn.ctx.Err() != nil {
+		println("PANIC new stream but closing conn")
 		cAbortStream(s)
 		return
 	}
@@ -184,6 +193,7 @@ func newStreamCallback(c, s C.HQUIC) {
 	case conn.acceptStreamQueue <- res:
 		rawConn.(MsQuicConn).streams.Store(s, res)
 	default:
+		println("WARNING rejecting stream")
 		res.releaseBuffers()
 		cAbortStream(s)
 	}
@@ -216,8 +226,10 @@ func closeStreamCallback(c, s C.HQUIC) {
 
 	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
 	if !has {
+		println("PANIC already close stream")
 		//cAbortStream(s)
 		return // already closed
+
 	}
 
 	stream := res.(MsQuicStream)
@@ -319,23 +331,24 @@ func startConnectionCallback(c C.HQUIC) {
 }
 
 //export freeSendBuffer
-func freeSendBuffer(buffer *C.uint8_t) {
-
-	idx := uintptr(unsafe.Pointer(buffer))
-	if sBuffer, has := sendBuffers.LoadAndDelete(idx); has {
-		v := sBuffer.(sendBuffer)
-		v.pinner.Unpin()
-		bufferPool.Put(v.goBuffer)
-		sendBuffersSize.Add(-1)
-	}
+func freeSendBuffer(idx uintptr) {
+	releaseSendBuffer(idx)
 }
 
 const bufferSize = 32 * 1024
+const smallBufferSize = 4 * 1024
 const initBufs = 2
 
 var bufferPool = sync.Pool{
 	New: func() any {
 		res := make([]byte, bufferSize)
+		return &res
+	},
+}
+
+var smallBufferPool = sync.Pool{
+	New: func() any {
+		res := make([]byte, smallBufferSize)
 		return &res
 	},
 }
@@ -379,6 +392,7 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 func newDatagramCallback(c C.HQUIC, recvBuffer *C.QUIC_BUFFER) {
 	rawConn, has := connections.Load(c)
 	if !has {
+		println("PANIC no conn for datagram")
 		return // already closed
 	}
 
@@ -401,6 +415,7 @@ func closePeerConnectionCallback(c C.HQUIC) {
 	res, has := connections.Load(c)
 
 	if !has {
+		println("PANIC no conn for peer close")
 		//cAbortConnection(c)
 		return // already closed
 	}
