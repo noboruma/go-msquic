@@ -91,6 +91,10 @@ AbortStream(HQUIC stream) {
 	MsQuic->StreamShutdown(stream, QUIC_STREAM_SHUTDOWN_FLAG_ABORT, 0);
 }
 
+void FreeStream(HQUIC stream) {
+	MsQuic->StreamClose(stream);
+}
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 _Function_class_(QUIC_STREAM_CALLBACK)
 QUIC_STATUS
@@ -152,7 +156,7 @@ StreamCallback(
 		}
 		closeStreamCallback(Context, Stream);
 		if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
-			MsQuic->StreamClose(Stream);
+			FreeStream(Stream);
 		}
         break;
     default:
