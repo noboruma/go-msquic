@@ -73,10 +73,10 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 		}
 	}
 	if buffer != nil {
-		pinRecv.Add(1)
+		bufFound.Add(1)
 		return buffer[offsetStart : offsetStart+length]
 	}
-	pinSend.Add(1)
+	bufNotfound.Add(1)
 	return buffer
 }
 
@@ -131,7 +131,7 @@ func freeRecvBuffer(end uintptr) bool {
 	if buf, has := recvBuffers.LoadAndDelete(end); has {
 		b := buf.(escapingBuffer)
 		b.pinner.Unpin()
-		bufferPool.Put(b.goBuffer)
+		recvBufferPool.Put(b.goBuffer)
 		receiveBuffers.Add(-1)
 		return true
 	}
@@ -189,6 +189,7 @@ type sliceAddresses struct {
 }
 
 func (ss *streamState) needMoreBuffer() bool {
+	bufferSize := uint32(receiveBufferSize)
 	return ss.recvCount.Load()+bufferSize+(bufferSize/4) >= ss.recvTotal.Load() // always keep 1 extra bufferSize
 }
 
@@ -313,8 +314,8 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		}
 	}
 	var n C.int64_t
-	bufNum := len(data) / bufferSize
-	if len(data)%bufferSize != 0 {
+	bufNum := len(data) / sendBufferSize
+	if len(data)%sendBufferSize != 0 {
 		bufNum += 1
 	}
 	for range bufNum {
@@ -464,9 +465,9 @@ func (mqs MsQuicStream) abortClose() error {
 }
 
 func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
-	buf := bufferPool.Get().(*[]byte)
+	buf := recvBufferPool.Get().(*[]byte)
 	buffer := *buf
-	defer bufferPool.Put(buf)
+	defer recvBufferPool.Put(buf)
 	n := int64(0)
 	for mqs.ctx.Err() == nil {
 		bn, err := mqs.Read(buffer[:])
@@ -490,9 +491,9 @@ func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
-	buf := bufferPool.Get().(*[]byte)
+	buf := recvBufferPool.Get().(*[]byte)
 	buffer := *buf
-	defer bufferPool.Put(buf)
+	defer recvBufferPool.Put(buf)
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
@@ -508,7 +509,7 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func getSendBuffer() []byte {
-	buf := smallBufferPool.Get().(*[]byte)
+	buf := sendBufferPool.Get().(*[]byte)
 	buffer := *buf
 	pinner := runtime.Pinner{}
 	pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
@@ -528,7 +529,7 @@ func releaseSendBuffer(idx uintptr) {
 	if sBuffer, has := sendBuffers.LoadAndDelete(idx); has {
 		v := sBuffer.(escapingBuffer)
 		v.pinner.Unpin()
-		smallBufferPool.Put(v.goBuffer)
+		sendBufferPool.Put(v.goBuffer)
 		sendBuffersSize.Add(-1)
 	} else {
 		println("PANIC no buffer to free")

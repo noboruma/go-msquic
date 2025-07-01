@@ -14,7 +14,7 @@ import (
 // #include "inc/msquic.h"
 import "C"
 
-var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, pinSend, pinRecv, startSucc, startFail atomic.Int64
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, bufFound, bufNotfound, startSucc, startFail atomic.Int64
 
 func init() {
 	if os.Getenv("QUIC_DEBUG") != "" {
@@ -38,8 +38,8 @@ func init() {
 					"sendReqs", sendBuffersCount.Swap(0),
 					"recvSize", receiveBuffers.Load(),
 					"recvReqs", recvBuffersCount.Swap(0),
-					"pinSend", pinSend.Swap(0),
-					"pinRecv", pinRecv.Swap(0),
+					"bufNot", bufFound.Swap(0),
+					"bufFound", bufNotfound.Swap(0),
 					"startSucc", startSucc.Swap(0),
 					"startFail", startFail.Swap(0))
 			}
@@ -335,27 +335,31 @@ func freeSendBuffer(idx uintptr) {
 	releaseSendBuffer(idx)
 }
 
-const bufferSize = 32 * 1024
-const smallBufferSize = 4 * 1024
-const initBufs = 2
+const defaultReceiveBufferSize = 32 * 1024
+const defaultSendBufferSize = 4 * 1024
+const initReceiveBufs = 2
 
-var bufferPool = sync.Pool{
+var receiveBufferSize = defaultReceiveBufferSize
+var sendBufferSize = defaultSendBufferSize
+var initBufs = initReceiveBufs
+
+var recvBufferPool = sync.Pool{
 	New: func() any {
-		res := make([]byte, bufferSize)
+		res := make([]byte, receiveBufferSize)
 		return &res
 	},
 }
 
-var smallBufferPool = sync.Pool{
+var sendBufferPool = sync.Pool{
 	New: func() any {
-		res := make([]byte, smallBufferSize)
+		res := make([]byte, sendBufferSize)
 		return &res
 	},
 }
 
 func provideAppBuffer(s MsQuicStream) []byte {
 
-	goSlicePool := bufferPool.Get().(*[]byte)
+	goSlicePool := recvBufferPool.Get().(*[]byte)
 	goSlice := *goSlicePool
 	sliceUnder := unsafe.Pointer(unsafe.SliceData(goSlice))
 
