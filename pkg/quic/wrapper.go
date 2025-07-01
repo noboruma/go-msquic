@@ -15,6 +15,7 @@ package quic
 #cgo noescape MsQuicSetup
 #cgo noescape GetRemoteAddr
 #cgo noescape FreeStream
+#cgo noescape AttachAppBuffer
 
 #cgo nocallback ShutdownConnection
 #cgo nocallback AbortStream
@@ -287,8 +288,12 @@ func cDatagramSendConnection(c C.HQUIC, msg []byte) C.int32_t {
 	return C.DatagramSendConnection(c, buffer)
 }
 
-func cAttachAppBuffer(s C.HQUIC, buffer *C.QUIC_BUFFER) C.int32_t {
-	return C.AttachAppBuffer(s, buffer)
+func cAttachAppBuffer(s C.HQUIC, buffer []byte) C.int32_t {
+	header := C.QUIC_BUFFER{
+		Buffer: (*C.uint8_t)(unsafe.Pointer(unsafe.SliceData(buffer))),
+		Length: C.uint32_t(len(buffer)),
+	}
+	return C.AttachAppBuffer(s, &header)
 }
 
 func cGetPerfCounters() []uint64 {

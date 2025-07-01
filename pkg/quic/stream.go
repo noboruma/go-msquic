@@ -66,7 +66,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 		end := buf.end
 		if current >= start && current < end && currentEnd > start && currentEnd <= end {
 			if rBuffer, has := recvBuffers.Load(end); has {
-				buffer = *rBuffer.(recvBuffer).goBuffer
+				buffer = *rBuffer.(escapingBuffer).goBuffer
 				offsetStart = int(uintptr(current) - uintptr(start))
 			}
 			break
@@ -129,10 +129,9 @@ func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
 
 func freeRecvBuffer(end uintptr) bool {
 	if buf, has := recvBuffers.LoadAndDelete(end); has {
-		b := buf.(recvBuffer)
+		b := buf.(escapingBuffer)
 		b.pinner.Unpin()
 		bufferPool.Put(b.goBuffer)
-		C.free(unsafe.Pointer(b.cBuffer))
 		receiveBuffers.Add(-1)
 		return true
 	}
@@ -156,13 +155,7 @@ func (cb *ChainedBuffer) HasData() bool {
 	return next != nil
 }
 
-type recvBuffer struct {
-	cBuffer  *C.QUIC_BUFFER
-	goBuffer *[]byte
-	pinner   runtime.Pinner
-}
-
-type sendBuffer struct {
+type escapingBuffer struct {
 	goBuffer *[]byte
 	pinner   runtime.Pinner
 }
@@ -330,9 +323,10 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		sendBuffersCount.Add(1)
 		cNoAlloc := C.uint8_t(1)
 		nn := cStreamWrite(mqs.conn, mqs.stream,
-			(*C.uint8_t)(unsafe.SliceData(buffer[:m])),
+			(*C.uint8_t)(unsafe.SliceData(buffer)),
 			C.int64_t(m),
 			cNoAlloc)
+		runtime.KeepAlive(buffer)
 		if nn == -1 {
 			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
 			releaseSendBuffer(idx)
@@ -340,7 +334,6 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		}
 		n += nn
 	}
-	runtime.KeepAlive(data)
 	return int(n), nil
 }
 
@@ -365,13 +358,13 @@ func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 	var n C.int64_t
 	cNoAlloc := C.uint8_t(0)
 	n = cStreamWrite(mqs.conn, mqs.stream,
-		(*C.uint8_t)(unsafe.SliceData(data[:])),
+		(*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
 		cNoAlloc)
+	runtime.KeepAlive(data)
 	if n == -1 {
 		return int(n), fmt.Errorf("write stream error %v", len(data))
 	}
-	runtime.KeepAlive(data)
 	return int(n), nil
 }
 
@@ -397,13 +390,13 @@ func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
 	}
 	cNoAlloc := C.uint8_t(1)
 	n := cStreamWrite(mqs.conn, mqs.stream,
-		(*C.uint8_t)(unsafe.SliceData(data[:])),
+		(*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
 		cNoAlloc)
+	runtime.KeepAlive(data)
 	if n == -1 {
 		return int(n), fmt.Errorf("write stream error %v", len(data))
 	}
-	runtime.KeepAlive(data)
 	return int(n), nil
 }
 
@@ -520,10 +513,12 @@ func getSendBuffer() []byte {
 	pinner := runtime.Pinner{}
 	pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
 	idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
-	sendBuffers.Store(idx, sendBuffer{
+	if _, loaded := sendBuffers.LoadOrStore(idx, escapingBuffer{
 		goBuffer: buf,
 		pinner:   pinner,
-	})
+	}); loaded {
+		println("PANIC send buffer corruption")
+	}
 	sendBuffersSize.Add(1)
 	sendBuffersCount.Add(1)
 	return buffer
@@ -531,7 +526,7 @@ func getSendBuffer() []byte {
 
 func releaseSendBuffer(idx uintptr) {
 	if sBuffer, has := sendBuffers.LoadAndDelete(idx); has {
-		v := sBuffer.(sendBuffer)
+		v := sBuffer.(escapingBuffer)
 		v.pinner.Unpin()
 		smallBufferPool.Put(v.goBuffer)
 		sendBuffersSize.Add(-1)
@@ -558,8 +553,8 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	return n, io.EOF
 }
 
-var sendBuffers sync.Map //map[uintptr]sendBuffer
-var recvBuffers sync.Map //map[uintptr]recvBuffer
+var sendBuffers sync.Map //map[uintptr]escapingBuffer
+var recvBuffers sync.Map //map[uintptr]escapingBuffer
 
 func (res MsQuicStream) releaseBuffers() {
 

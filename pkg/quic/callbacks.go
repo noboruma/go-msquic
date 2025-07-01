@@ -206,7 +206,7 @@ func provideAndAttachAppBuffer(s C.HQUIC, res MsQuicStream) error {
 	if initBuf == nil || cAttachAppBuffer(s, initBuf) == -1 {
 		return attachErr
 	}
-	res.state.recvTotal.Add(uint32(initBuf.Length))
+	res.state.recvTotal.Add(uint32(len(initBuf)))
 	return nil
 }
 
@@ -353,7 +353,7 @@ var smallBufferPool = sync.Pool{
 	},
 }
 
-func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
+func provideAppBuffer(s MsQuicStream) []byte {
 
 	goSlicePool := bufferPool.Get().(*[]byte)
 	goSlice := *goSlicePool
@@ -366,12 +366,6 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 	recvBuffersCount.Add(1)
 	endAddr := uintptr(unsafe.Add(sliceUnder, len(goSlice)))
 
-	size := unsafe.Sizeof(C.QUIC_BUFFER{})
-	res := (*C.QUIC_BUFFER)(C.malloc(C.size_t(size)))
-	pinner.Pin(res)
-	res.Buffer = (*C.uint8_t)(sliceUnder)
-	res.Length = C.uint32_t(len(goSlice))
-
 	s.state.attachedRecvBuffers.access.Lock()
 	s.state.attachedRecvBuffers.buffers = append(s.state.attachedRecvBuffers.buffers, sliceAddresses{
 		start: uintptr(sliceUnder),
@@ -379,13 +373,12 @@ func provideAppBuffer(s MsQuicStream) *C.QUIC_BUFFER {
 	})
 	s.state.attachedRecvBuffers.access.Unlock()
 
-	recvBuffers.Store(endAddr, recvBuffer{
+	recvBuffers.Store(endAddr, escapingBuffer{
 		goBuffer: goSlicePool,
-		cBuffer:  res,
 		pinner:   pinner,
 	})
 
-	return res
+	return goSlice
 }
 
 //export newDatagramCallback
