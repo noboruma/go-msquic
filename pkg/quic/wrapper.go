@@ -251,6 +251,10 @@ func cAbortStream(s C.HQUIC) {
 	C.AbortStream(s)
 }
 
+func cAbortSendStream(s C.HQUIC) {
+	C.AbortSendStream(s)
+}
+
 func cStreamWrite(c, s C.HQUIC, cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_t) C.int64_t {
 	return C.StreamWrite(c, s, cArray, size, noAlloc)
 }

@@ -24,6 +24,7 @@ type Stream interface {
 	WriteTo(w io.Writer) (int64, error)
 	Write(data []byte) (int, error)
 	Close() error
+	CloseRead() error
 	SetDeadline(ttl time.Time) error
 	SetReadDeadline(ttl time.Time) error
 	SetWriteDeadline(ttl time.Time) error
@@ -166,6 +167,7 @@ type streamState struct {
 	writeAccess   sync.RWMutex
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
+	readShutdown      atomic.Bool
 	recvCount     atomic.Uint32
 	recvTotal     atomic.Uint32
 
@@ -251,6 +253,9 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 		time10.Add(time.Since(now).Milliseconds())
 	}()
 	state := mqs.state
+	if mqs.state.readShutdown.Load() {
+		return 0, io.EOF
+	}
 	if !state.hasReadData() {
 		if mqs.ctx.Err() != nil {
 			time11.Add(time.Since(now).Milliseconds())
@@ -280,7 +285,7 @@ func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	case <-mqs.readSignal:
-		return true
+		return !mqs.state.readShutdown.Load()
 	}
 }
 
@@ -436,6 +441,10 @@ func (mqs MsQuicStream) Close() error {
 	return mqs.abortClose()
 }
 
+func (mqs MsQuicStream) CloseRead() error {
+	return mqs.sendClose()
+}
+
 func (mqs MsQuicStream) release() error {
 	mqs.state.closingAccess.Lock()
 	defer mqs.state.closingAccess.Unlock()
@@ -452,6 +461,20 @@ func (mqs MsQuicStream) operationsBarrier() {
 	mqs.state.writeAccess.Unlock()
 	mqs.state.readAccess.Lock()
 	mqs.state.readAccess.Unlock()
+}
+
+func (mqs MsQuicStream) sendClose() error {
+	mqs.state.closingAccess.Lock()
+	defer mqs.state.closingAccess.Unlock()
+	if !mqs.state.shutdown.Load() {
+		cAbortSendStream(mqs.stream)
+		mqs.state.readShutdown.Store(true)
+		select{
+		case mqs.readSignal <- struct{}{}:
+		default:
+		}
+	}
+	return nil
 }
 
 func (mqs MsQuicStream) abortClose() error {
