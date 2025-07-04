@@ -31,21 +31,21 @@ type Stream interface {
 	Context() context.Context
 }
 
-type ChainedBuffers struct {
-	current         *ChainedBuffer
-	tail            *ChainedBuffer
+type chainedBuffers struct {
+	current         *chainedBuffer
+	tail            *chainedBuffer
 	copy            bool
 	readAccess      *sync.RWMutex
 	ctx             context.Context
 	attachedBuffers *attachedBuffers
 }
 
-func (cbs *ChainedBuffers) HasData() bool {
+func (cbs *chainedBuffers) HasData() bool {
 	return cbs.current.HasData()
 }
 
-func (cbs *ChainedBuffers) Write(batch []byte) {
-	next := ChainedBuffer{}
+func (cbs *chainedBuffers) Write(batch []byte) {
+	next := chainedBuffer{}
 	if cbs.copy {
 		next.copyReadBuffer.Grow(len(batch))
 		next.copyReadBuffer.Write(batch)
@@ -87,7 +87,7 @@ func sliceEnd(subBuf []byte) uintptr {
 	return uintptr(currentEnd)
 }
 
-func (cbs *ChainedBuffers) Read(output []byte) (int, error) {
+func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 	n := 0
 	cbs.readAccess.RLock()
 	defer cbs.readAccess.RUnlock()
@@ -139,16 +139,16 @@ func freeRecvBuffer(end uintptr) bool {
 	return false
 }
 
-type ChainedBuffer struct {
+type chainedBuffer struct {
 	noCopyReadBuffer []byte
 	noCopyReadIndex  int // use index as p[len(p):] reset to the first address
 	copyReadBuffer   bytes.Buffer
-	next             atomic.Pointer[ChainedBuffer]
+	next             atomic.Pointer[chainedBuffer]
 	empty            atomic.Bool
 	copy             bool
 }
 
-func (cb *ChainedBuffer) HasData() bool {
+func (cb *chainedBuffer) HasData() bool {
 	if !cb.empty.Load() {
 		return true
 	}
@@ -162,7 +162,7 @@ type escapingBuffer struct {
 }
 
 type streamState struct {
-	readBuffers   ChainedBuffers
+	readBuffers   chainedBuffers
 	writeDeadline time.Time
 	writeAccess   sync.RWMutex
 	startSignal   chan struct{}
@@ -216,7 +216,7 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 		ctx:    ctx,
 		cancel: cancel,
 		state: &streamState{
-			readBuffers: ChainedBuffers{
+			readBuffers: chainedBuffers{
 				copy: !appBuffers,
 			},
 			readDeadlineContext: ctx,
@@ -230,7 +230,7 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 		readSignal: make(chan struct{}, 1),
 		noAlloc:    noAlloc,
 	}
-	res.state.readBuffers.current = &ChainedBuffer{}
+	res.state.readBuffers.current = &chainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
 	res.state.readBuffers.ctx = ctx
 	res.state.readBuffers.readAccess = &res.state.readAccess
