@@ -102,7 +102,7 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 		return 0 // already closed
 	}
 	conn := rawConn.(MsQuicConn)
-	rawStream, has := conn.streams.Load(s)
+	rawStream, has := conn.state.streams.Load(s)
 	if !has {
 		//cAbortStream(s)
 		println("PANIC new read stream no stream")
@@ -168,8 +168,8 @@ func newStreamCallback(c, s C.HQUIC) {
 		return // already closed
 	}
 	conn := rawConn.(MsQuicConn)
-	conn.openStream.RLock()
-	defer conn.openStream.RUnlock()
+	conn.state.openStream.RLock()
+	defer conn.state.openStream.RUnlock()
 	if conn.ctx.Err() != nil {
 		println("PANIC new stream but closing conn")
 		cAbortStream(s)
@@ -191,7 +191,7 @@ func newStreamCallback(c, s C.HQUIC) {
 
 	select {
 	case conn.acceptStreamQueue <- res:
-		rawConn.(MsQuicConn).streams.Store(s, res)
+		rawConn.(MsQuicConn).state.streams.Store(s, res)
 	default:
 		println("WARNING rejecting stream")
 		res.releaseBuffers()
@@ -224,7 +224,7 @@ func closeStreamCallback(c, s C.HQUIC) {
 		return // already closed
 	}
 
-	res, has := rawConn.(MsQuicConn).streams.LoadAndDelete(s)
+	res, has := rawConn.(MsQuicConn).state.streams.LoadAndDelete(s)
 	if !has {
 		println("PANIC already close stream")
 		//cAbortStream(s)
@@ -252,7 +252,7 @@ func abortStreamCallback(c, s C.HQUIC) {
 	}
 
 	conn := rawConn.(MsQuicConn)
-	res, has := conn.streams.Load(s)
+	res, has := conn.state.streams.Load(s)
 	if !has {
 		println("PANIC cannot find stream to abort")
 		//cAbortStream(s)
@@ -295,7 +295,7 @@ func startStreamCallback(c, s C.HQUIC) {
 		return // already closed
 	}
 
-	res, has := rawConn.(MsQuicConn).streams.Load(s)
+	res, has := rawConn.(MsQuicConn).state.streams.Load(s)
 	if !has {
 		println("PANIC no stream for start stream")
 		//cAbortStream(s)
@@ -418,4 +418,14 @@ func closePeerConnectionCallback(c C.HQUIC) {
 	}
 
 	res.(MsQuicConn).peerClose()
+}
+
+//export peerAddressChangedCallback
+func peerAddressChangedCallback(c C.HQUIC) {
+	res, has := connections.Load(c)
+	if !has {
+		println("PANIC no conn for peer change addr")
+		return // already closed
+	}
+	res.(MsQuicConn).state.dirtyRemote.Store(true)
 }

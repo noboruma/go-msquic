@@ -19,6 +19,8 @@ type Connection interface {
 	AcceptStream(ctx context.Context) (MsQuicStream, error)
 	Close() error
 	RemoteAddr() net.Addr
+	DirtyRemoteAddr() bool
+	RefreshRemoteAddr()
 	Context() context.Context
 	SendDatagram(msg []byte) error
 	ReceiveDatagram(ctx context.Context) ([]byte, error)
@@ -43,17 +45,23 @@ type Config struct {
 	EnableAppBuffering      bool // This flags is global across all listeners & dialers
 }
 
+type ConnState struct {
+	remoteAddr       net.UDPAddr
+	dirtyRemote      atomic.Bool
+	shutdown         atomic.Bool
+	streams          sync.Map //map[C.HQUIC]MsQuicStream
+	openStream       sync.RWMutex
+	remoteAddrAccess sync.RWMutex
+}
+
 type MsQuicConn struct {
-	remoteAddr        net.UDPAddr
+	state             *ConnState
 	ctx               context.Context
 	conn              C.HQUIC
 	config            C.HQUIC
 	acceptStreamQueue chan MsQuicStream
 	datagrams         chan []byte
 	cancel            context.CancelFunc
-	shutdown          *atomic.Bool
-	streams           *sync.Map //map[C.HQUIC]MsQuicStream
-	openStream        *sync.RWMutex
 	startSignal       chan struct{}
 	failOpenStream    bool
 	noAlloc           bool
@@ -71,15 +79,14 @@ func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicCon
 		acceptStreamQueue: make(chan MsQuicStream, streamAcceptQueueSize),
 		ctx:               ctx,
 		cancel:            cancel,
-		remoteAddr:        net.UDPAddr{IP: ip, Port: port},
-		shutdown:          new(atomic.Bool),
-		streams:           new(sync.Map),
 		failOpenStream:    failOnOpen,
-		openStream:        new(sync.RWMutex),
 		startSignal:       make(chan struct{}, 1),
 		noAlloc:           noAlloc,
 		useAppBuffers:     useAppBuffers,
 		datagrams:         make(chan []byte),
+		state: &ConnState{
+			remoteAddr: net.UDPAddr{IP: ip, Port: port},
+		},
 	}
 }
 
@@ -94,32 +101,32 @@ func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 }
 
 func (mqc MsQuicConn) Close() error {
-	if !mqc.shutdown.Swap(true) {
+	if !mqc.state.shutdown.Swap(true) {
 		mqc.cancel()
-		mqc.openStream.Lock()
-		defer mqc.openStream.Unlock()
+		mqc.state.openStream.Lock()
+		defer mqc.state.openStream.Unlock()
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
 }
 
 func (mqc MsQuicConn) peerClose() error {
-	if !mqc.shutdown.Swap(true) {
+	if !mqc.state.shutdown.Swap(true) {
 		mqc.cancel()
-		mqc.openStream.Lock()
-		defer mqc.openStream.Unlock()
+		mqc.state.openStream.Lock()
+		defer mqc.state.openStream.Unlock()
 	}
 	return nil
 }
 
 func (mqc MsQuicConn) appClose() error {
-	mqc.shutdown.Store(true)
+	mqc.state.shutdown.Store(true)
 	mqc.cancel()
-	mqc.openStream.Lock()
-	defer mqc.openStream.Unlock()
-	mqc.streams.Range(func(key, value any) bool {
+	mqc.state.openStream.Lock()
+	defer mqc.state.openStream.Unlock()
+	mqc.state.streams.Range(func(key, value any) bool {
 		println("PANIC Lingering stream")
-		if s, has := mqc.streams.LoadAndDelete(key); has {
+		if s, has := mqc.state.streams.LoadAndDelete(key); has {
 			s.(MsQuicStream).abortClose()
 			s.(MsQuicStream).operationsBarrier()
 		}
@@ -131,8 +138,8 @@ func (mqc MsQuicConn) appClose() error {
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
-	mqc.openStream.RLock()
-	defer mqc.openStream.RUnlock()
+	mqc.state.openStream.RLock()
+	defer mqc.state.openStream.RUnlock()
 
 	if mqc.ctx.Err() != nil {
 		return MsQuicStream{}, fmt.Errorf("closed connection")
@@ -146,7 +153,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		return MsQuicStream{}, fmt.Errorf("stream open error")
 	}
 	res := newMsQuicStream(mqc.conn, stream, mqc.ctx, mqc.noAlloc, mqc.useAppBuffers)
-	_, loaded := mqc.streams.LoadOrStore(stream, res)
+	_, loaded := mqc.state.streams.LoadOrStore(stream, res)
 	if loaded {
 		println("PANIC")
 	}
@@ -159,7 +166,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		for range initBufs {
 			initBuf := provideAppBuffer(res)
 			if initBuf == nil || cAttachAppBuffer(stream, initBuf) == -1 {
-				mqc.streams.Delete(stream)
+				mqc.state.streams.Delete(stream)
 				res.releaseBuffers()
 				cFreeStream(stream)
 				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
@@ -170,7 +177,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 
 	if cStartStream(stream, enable, useAppBuffers) == -1 {
 		if !mqc.failOpenStream {
-			mqc.streams.Delete(stream)
+			mqc.state.streams.Delete(stream)
 			res.releaseBuffers()
 			cFreeStream(stream)
 		}
@@ -207,7 +214,23 @@ func (mqc MsQuicConn) Context() context.Context {
 }
 
 func (mqc MsQuicConn) RemoteAddr() net.Addr {
-	return &mqc.remoteAddr
+	mqc.state.remoteAddrAccess.RLock()
+	defer mqc.state.remoteAddrAccess.RUnlock()
+	return &mqc.state.remoteAddr
+}
+
+func (mqc MsQuicConn) DirtyRemoteAddr() bool {
+	return mqc.state.dirtyRemote.Swap(false)
+}
+
+func (mqc MsQuicConn) RefreshRemoteAddr() {
+	mqc.state.remoteAddrAccess.Lock()
+	defer mqc.state.remoteAddrAccess.Unlock()
+	if !mqc.state.shutdown.Load() {
+		ip, port := getRemoteAddr(mqc.conn)
+		mqc.state.remoteAddr.IP = ip
+		mqc.state.remoteAddr.Port = port
+	}
 }
 
 func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {

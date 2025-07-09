@@ -167,7 +167,7 @@ type streamState struct {
 	writeAccess   sync.RWMutex
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
-	readShutdown      atomic.Bool
+	readShutdown  atomic.Bool
 	recvCount     atomic.Uint32
 	recvTotal     atomic.Uint32
 
@@ -469,7 +469,7 @@ func (mqs MsQuicStream) sendClose() error {
 	if !mqs.state.shutdown.Load() {
 		cAbortSendStream(mqs.stream)
 		mqs.state.readShutdown.Store(true)
-		select{
+		select {
 		case mqs.readSignal <- struct{}{}:
 		default:
 		}

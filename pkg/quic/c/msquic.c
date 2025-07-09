@@ -27,6 +27,7 @@ extern void freeSendBuffer(uint8_t *);
 extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
 extern void abortStreamCallback(HQUIC,HQUIC);
 extern void shutConnectionCallback(HQUIC);
+extern void peerAddressChangedCallback(HQUIC);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -310,6 +311,9 @@ ConnectionCallback(
 		if (LOGS_ENABLED) {
 			printf("[conn][%p] Connection resumed!\n", Connection);
 		}
+        break;
+    case QUIC_CONNECTION_EVENT_PEER_ADDRESS_CHANGED:
+		peerAddressChangedCallback(Connection);
         break;
 	case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED:
 		newDatagramCallback(Connection, Event->DATAGRAM_RECEIVED.Buffer);
