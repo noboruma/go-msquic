@@ -83,7 +83,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 
 func sliceEnd(subBuf []byte) uintptr {
 	current := unsafe.Pointer(unsafe.SliceData(subBuf))
-	currentEnd := unsafe.Add(current, len(subBuf))
+	currentEnd := unsafe.Add(current, len(subBuf)-1)
 	return uintptr(currentEnd)
 }
 
@@ -137,11 +137,7 @@ func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 }
 
 func freeRecvBuffer(end uintptr) bool {
-	if buf, has := recvBuffers.Load(end); has {
-		// For some reason LoadAndDelete cannot be used safely
-		// Since the recvBuffers is guarded with ReadAccess lock
-		// This operation is safe
-		recvBuffers.Delete(end) 
+	if buf, has := recvBuffers.LoadAndDelete(end); has {
 		b := buf.(escapingBuffer)
 		b.pinner.Unpin()
 		recvBufferPool.Put(b.goBuffer)

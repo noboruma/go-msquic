@@ -367,7 +367,7 @@ func provideAppBuffer(s MsQuicStream) []byte {
 
 	receiveBuffers.Add(1)
 	recvBuffersCount.Add(1)
-	endAddr := uintptr(unsafe.Add(sliceUnder, len(*goSlice)))
+	endAddr := sliceEnd(*goSlice)
 
 	s.state.attachedRecvBuffers.access.Lock()
 	s.state.attachedRecvBuffers.buffers = append(s.state.attachedRecvBuffers.buffers, sliceAddresses{
