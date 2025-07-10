@@ -38,8 +38,8 @@ func init() {
 					"sendReqs", sendBuffersCount.Swap(0),
 					"recvSize", receiveBuffers.Load(),
 					"recvReqs", recvBuffersCount.Swap(0),
-					"bufNot", bufFound.Swap(0),
-					"bufFound", bufNotfound.Swap(0),
+					"bufFound", bufFound.Swap(0),
+					"bufNotFound", bufNotfound.Swap(0),
 					"startSucc", startSucc.Swap(0),
 					"startFail", startFail.Swap(0))
 			}

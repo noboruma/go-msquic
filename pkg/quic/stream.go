@@ -61,7 +61,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 	var offsetStart int
 	buffers.access.RLock()
 	defer buffers.access.RUnlock()
-	currentEnd := current + uintptr(length)
+	currentEnd := current + uintptr(length) - 1
 	for _, buf := range buffers.buffers {
 		start := buf.start
 		end := buf.end
