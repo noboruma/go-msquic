@@ -57,7 +57,7 @@ func (cbs *chainedBuffers) Write(batch []byte) {
 }
 
 func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
-	var buffer []byte
+	var buffer *[]byte
 	var offsetStart int
 	buffers.access.RLock()
 	defer buffers.access.RUnlock()
@@ -67,7 +67,7 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 		end := buf.end
 		if current >= start && current < end && currentEnd > start && currentEnd <= end {
 			if rBuffer, has := recvBuffers.Load(end); has {
-				buffer = *rBuffer.(escapingBuffer).goBuffer
+				buffer = rBuffer.(escapingBuffer).goBuffer
 				offsetStart = int(uintptr(current) - uintptr(start))
 			}
 			break
@@ -75,16 +75,24 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 	}
 	if buffer != nil {
 		bufFound.Add(1)
-		return buffer[offsetStart : offsetStart+length]
+		return (*buffer)[offsetStart : offsetStart+length]
 	}
 	bufNotfound.Add(1)
-	return buffer
+	return nil
 }
 
 func sliceEnd(subBuf []byte) uintptr {
 	current := unsafe.Pointer(unsafe.SliceData(subBuf))
 	currentEnd := unsafe.Add(current, len(subBuf))
 	return uintptr(currentEnd)
+}
+
+func (cbs *chainedBuffers) Clear() {
+	cur := cbs.current
+	for cur != nil {
+		cur.noCopyReadBuffer = nil
+		cur = cur.next.Swap(nil)
+	}
 }
 
 func (cbs *chainedBuffers) Read(output []byte) (int, error) {
@@ -129,7 +137,11 @@ func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 }
 
 func freeRecvBuffer(end uintptr) bool {
-	if buf, has := recvBuffers.LoadAndDelete(end); has {
+	if buf, has := recvBuffers.Load(end); has {
+		// For some reason LoadAndDelete cannot be used safely
+		// Since the recvBuffers is guarded with ReadAccess lock
+		// This operation is safe
+		recvBuffers.Delete(end) 
 		b := buf.(escapingBuffer)
 		b.pinner.Unpin()
 		recvBufferPool.Put(b.goBuffer)
@@ -451,6 +463,8 @@ func (mqs MsQuicStream) release() error {
 	mqs.state.shutdown.Store(true)
 	mqs.cancel()
 	mqs.operationsBarrier()
+	mqs.state.readAccess.Lock()
+	defer mqs.state.readAccess.Unlock()
 	mqs.releaseBuffers()
 
 	return nil
@@ -459,8 +473,6 @@ func (mqs MsQuicStream) release() error {
 func (mqs MsQuicStream) operationsBarrier() {
 	mqs.state.writeAccess.Lock()
 	mqs.state.writeAccess.Unlock()
-	mqs.state.readAccess.Lock()
-	mqs.state.readAccess.Unlock()
 }
 
 func (mqs MsQuicStream) sendClose() error {
@@ -533,10 +545,9 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 
 func getSendBuffer() []byte {
 	buf := sendBufferPool.Get().(*[]byte)
-	buffer := *buf
 	pinner := runtime.Pinner{}
-	pinner.Pin(unsafe.Pointer(unsafe.SliceData(buffer)))
-	idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+	pinner.Pin(unsafe.Pointer(unsafe.SliceData(*buf)))
+	idx := uintptr(unsafe.Pointer(unsafe.SliceData(*buf)))
 	if _, loaded := sendBuffers.LoadOrStore(idx, escapingBuffer{
 		goBuffer: buf,
 		pinner:   pinner,
@@ -545,7 +556,7 @@ func getSendBuffer() []byte {
 	}
 	sendBuffersSize.Add(1)
 	sendBuffersCount.Add(1)
-	return buffer
+	return *buf
 }
 
 func releaseSendBuffer(idx uintptr) {
@@ -584,6 +595,7 @@ func (res MsQuicStream) releaseBuffers() {
 
 	res.state.attachedRecvBuffers.access.Lock()
 	defer res.state.attachedRecvBuffers.access.Unlock()
+	res.state.readBuffers.Clear()
 	for _, buf := range res.state.attachedRecvBuffers.buffers {
 		freeRecvBuffer(buf.end)
 	}

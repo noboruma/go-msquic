@@ -19,6 +19,7 @@ type Connection interface {
 	AcceptStream(ctx context.Context) (MsQuicStream, error)
 	Close() error
 	RemoteAddr() net.Addr
+	RemoteIP() string
 	DirtyRemoteAddr() bool
 	RefreshRemoteAddr()
 	Context() context.Context
@@ -217,6 +218,12 @@ func (mqc MsQuicConn) RemoteAddr() net.Addr {
 	mqc.state.remoteAddrAccess.RLock()
 	defer mqc.state.remoteAddrAccess.RUnlock()
 	return &mqc.state.remoteAddr
+}
+
+func (mqc MsQuicConn) RemoteIP() string {
+	mqc.state.remoteAddrAccess.RLock()
+	defer mqc.state.remoteAddrAccess.RUnlock()
+	return mqc.state.remoteAddr.IP.String()
 }
 
 func (mqc MsQuicConn) DirtyRemoteAddr() bool {

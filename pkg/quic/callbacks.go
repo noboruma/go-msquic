@@ -359,16 +359,15 @@ var sendBufferPool = sync.Pool{
 
 func provideAppBuffer(s MsQuicStream) []byte {
 
-	goSlicePool := recvBufferPool.Get().(*[]byte)
-	goSlice := *goSlicePool
-	sliceUnder := unsafe.Pointer(unsafe.SliceData(goSlice))
+	goSlice := recvBufferPool.Get().(*[]byte)
+	sliceUnder := unsafe.Pointer(unsafe.SliceData(*goSlice))
 
 	pinner := runtime.Pinner{}
 	pinner.Pin(sliceUnder)
 
 	receiveBuffers.Add(1)
 	recvBuffersCount.Add(1)
-	endAddr := uintptr(unsafe.Add(sliceUnder, len(goSlice)))
+	endAddr := uintptr(unsafe.Add(sliceUnder, len(*goSlice)))
 
 	s.state.attachedRecvBuffers.access.Lock()
 	s.state.attachedRecvBuffers.buffers = append(s.state.attachedRecvBuffers.buffers, sliceAddresses{
@@ -378,11 +377,11 @@ func provideAppBuffer(s MsQuicStream) []byte {
 	s.state.attachedRecvBuffers.access.Unlock()
 
 	recvBuffers.Store(endAddr, escapingBuffer{
-		goBuffer: goSlicePool,
+		goBuffer: goSlice,
 		pinner:   pinner,
 	})
 
-	return goSlice
+	return *goSlice
 }
 
 //export newDatagramCallback
