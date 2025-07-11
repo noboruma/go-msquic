@@ -117,7 +117,11 @@ StreamCallback(
 			if (Event->START_COMPLETE.Status == QUIC_STATUS_SUCCESS) {
 				startStreamCallback(Context, Stream);
 			} else {
-				abortStreamCallback(Context, Stream);
+				// This is a special case.
+				// According to the doc, on failure, this is the only Event called.
+				// So we proceed with cleaning up everything
+				closeStreamCallback(Context, Stream);
+				FreeStream(Stream);
 			}
 			break;
 		case QUIC_STREAM_EVENT_SEND_COMPLETE:

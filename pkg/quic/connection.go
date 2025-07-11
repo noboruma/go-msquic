@@ -139,6 +139,8 @@ func (mqc MsQuicConn) appClose() error {
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
+	open.Add(1)
+	defer open.Add(-1)
 	mqc.state.openStream.RLock()
 	defer mqc.state.openStream.RUnlock()
 

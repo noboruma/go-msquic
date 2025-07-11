@@ -14,7 +14,7 @@ import (
 // #include "inc/msquic.h"
 import "C"
 
-var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, bufFound, bufNotfound, startSucc, startFail atomic.Int64
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, bufFound, bufNotfound, startSucc, startFail, open, wait, read, write, release atomic.Int64
 
 func init() {
 	if os.Getenv("QUIC_DEBUG") != "" {
@@ -41,7 +41,12 @@ func init() {
 					"bufFound", bufFound.Swap(0),
 					"bufNotFound", bufNotfound.Swap(0),
 					"startSucc", startSucc.Swap(0),
-					"startFail", startFail.Swap(0))
+					"startFail", startFail.Swap(0),
+					"open:", open.Load(),
+					"wait", wait.Load(),
+					"release:", release.Load(),
+					"read:", read.Load(),
+					"werite", write.Load())
 			}
 		}()
 	}

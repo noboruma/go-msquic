@@ -256,6 +256,8 @@ func (mqs MsQuicStream) waitStart() bool {
 }
 
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
+	read.Add(1)
+	defer read.Add(-1)
 	now := time.Now()
 	defer func() {
 		time10.Add(time.Since(now).Milliseconds())
@@ -289,6 +291,8 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 }
 
 func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
+	wait.Add(1)
+	defer wait.Add(-1)
 	select {
 	case <-ctx.Done():
 		return false
@@ -302,6 +306,8 @@ var sendBuffersCount atomic.Int64
 var recvBuffersCount atomic.Int64
 
 func (mqs MsQuicStream) Write(data []byte) (int, error) {
+	write.Add(1)
+	defer write.Add(-1)
 	if !mqs.noAlloc {
 		return mqs.cCopyWrite(data)
 	}
@@ -454,6 +460,8 @@ func (mqs MsQuicStream) CloseRead() error {
 }
 
 func (mqs MsQuicStream) release() error {
+	release.Add(1)
+	defer release.Add(-1)
 	mqs.state.closingAccess.Lock()
 	defer mqs.state.closingAccess.Unlock()
 	mqs.state.shutdown.Store(true)
