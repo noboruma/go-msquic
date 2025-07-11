@@ -377,7 +377,7 @@ func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 		cNoAlloc)
 	runtime.KeepAlive(data)
 	if n == -1 {
-		return int(n), fmt.Errorf("write stream error %v", len(data))
+		return 0, fmt.Errorf("write stream error %v", len(data))
 	}
 	return int(n), nil
 }
@@ -409,7 +409,7 @@ func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
 		cNoAlloc)
 	runtime.KeepAlive(data)
 	if n == -1 {
-		return int(n), fmt.Errorf("write stream error %v", len(data))
+		return 0, fmt.Errorf("write stream error %v", len(data))
 	}
 	return int(n), nil
 }
