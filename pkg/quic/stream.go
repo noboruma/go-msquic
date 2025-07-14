@@ -35,7 +35,6 @@ type chainedBuffers struct {
 	current         *chainedBuffer
 	tail            *chainedBuffer
 	copy            bool
-	readAccess      *sync.RWMutex
 	ctx             context.Context
 	attachedBuffers *attachedBuffers
 }
@@ -97,8 +96,6 @@ func (cbs *chainedBuffers) Clear() {
 
 func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 	n := 0
-	cbs.readAccess.RLock()
-	defer cbs.readAccess.RUnlock()
 	if cbs.ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -172,14 +169,12 @@ type escapingBuffer struct {
 type streamState struct {
 	readBuffers   chainedBuffers
 	writeDeadline time.Time
-	writeAccess   sync.RWMutex
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
 	readShutdown  atomic.Bool
 	recvCount     atomic.Uint32
 	recvTotal     atomic.Uint32
 
-	readAccess          sync.RWMutex
 	readDeadlineContext context.Context
 	readDeadlineCancel  context.CancelFunc
 
@@ -241,7 +236,6 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 	res.state.readBuffers.current = &chainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
 	res.state.readBuffers.ctx = ctx
-	res.state.readBuffers.readAccess = &res.state.readAccess
 	res.state.readBuffers.attachedBuffers = &res.state.attachedRecvBuffers
 	return res
 }
@@ -250,7 +244,7 @@ func (mqs MsQuicStream) waitStart() bool {
 	select {
 	case <-mqs.state.startSignal:
 		return true
-	case <-mqs.Context().Done():
+	case <-mqs.ctx.Done():
 	}
 	return false
 }
@@ -321,8 +315,6 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 	}()
 	state := mqs.state
 	ctx := mqs.ctx
-	mqs.state.writeAccess.RLock()
-	defer mqs.state.writeAccess.RUnlock()
 	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -364,8 +356,6 @@ func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 	}()
 	state := mqs.state
 	ctx := mqs.ctx
-	mqs.state.writeAccess.RLock()
-	defer mqs.state.writeAccess.RUnlock()
 	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -397,8 +387,6 @@ func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
 	}()
 	state := mqs.state
 	ctx := mqs.ctx
-	mqs.state.writeAccess.RLock()
-	defer mqs.state.writeAccess.RUnlock()
 	if ctx.Err() != nil {
 		return 0, io.EOF
 	}
@@ -466,17 +454,8 @@ func (mqs MsQuicStream) release() error {
 	defer mqs.state.closingAccess.Unlock()
 	mqs.state.shutdown.Store(true)
 	mqs.cancel()
-	mqs.operationsBarrier()
-	mqs.state.readAccess.Lock()
-	defer mqs.state.readAccess.Unlock()
 	mqs.releaseBuffers()
-
 	return nil
-}
-
-func (mqs MsQuicStream) operationsBarrier() {
-	mqs.state.writeAccess.Lock()
-	mqs.state.writeAccess.Unlock()
 }
 
 func (mqs MsQuicStream) sendClose() error {

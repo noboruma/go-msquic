@@ -51,7 +51,6 @@ type ConnState struct {
 	dirtyRemote      atomic.Bool
 	shutdown         atomic.Bool
 	streams          sync.Map //map[C.HQUIC]MsQuicStream
-	openStream       sync.RWMutex
 	remoteAddrAccess sync.RWMutex
 }
 
@@ -102,20 +101,17 @@ func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 }
 
 func (mqc MsQuicConn) Close() error {
+	mqc.cancel()
 	if !mqc.state.shutdown.Swap(true) {
-		mqc.cancel()
-		mqc.state.openStream.Lock()
-		defer mqc.state.openStream.Unlock()
 		cShutdownConnection(mqc.conn)
 	}
 	return nil
 }
 
 func (mqc MsQuicConn) peerClose() error {
+	mqc.cancel()
 	if !mqc.state.shutdown.Swap(true) {
-		mqc.cancel()
-		mqc.state.openStream.Lock()
-		defer mqc.state.openStream.Unlock()
+		cAbortConnection(mqc.conn)
 	}
 	return nil
 }
@@ -123,17 +119,18 @@ func (mqc MsQuicConn) peerClose() error {
 func (mqc MsQuicConn) appClose() error {
 	mqc.state.shutdown.Store(true)
 	mqc.cancel()
-	mqc.state.openStream.Lock()
-	defer mqc.state.openStream.Unlock()
+	lingering := false
 	mqc.state.streams.Range(func(key, value any) bool {
-		println("PANIC Lingering stream")
-		if s, has := mqc.state.streams.LoadAndDelete(key); has {
-			s.(MsQuicStream).abortClose()
-			s.(MsQuicStream).operationsBarrier()
-		}
-		return true
+		lingering = true
+		return false
 	})
-	connections.Delete(mqc.conn)
+	if lingering {
+		println("PANIC lingering streams")
+	}
+
+	if len(mqc.acceptStreamQueue) != 0 {
+		println("PANIC lingering streams in queue")
+	}
 
 	return nil
 }
@@ -141,8 +138,6 @@ func (mqc MsQuicConn) appClose() error {
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	open.Add(1)
 	defer open.Add(-1)
-	mqc.state.openStream.RLock()
-	defer mqc.state.openStream.RUnlock()
 
 	if mqc.ctx.Err() != nil {
 		return MsQuicStream{}, fmt.Errorf("closed connection")
@@ -179,18 +174,15 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 
 	if cStartStream(stream, enable, useAppBuffers) == -1 {
-		if !mqc.failOpenStream {
-			mqc.state.streams.Delete(stream)
+		if _, has := mqc.state.streams.LoadAndDelete(stream); has {
 			res.releaseBuffers()
 			cFreeStream(stream)
 		}
+		startErr.Add(1)
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
 	if mqc.failOpenStream {
 		if !res.waitStart() {
-			//res.releaseBuffers()
-			//mqc.streams.Delete(stream)
-			//cFreeStream(stream)
 			startFail.Add(1)
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}

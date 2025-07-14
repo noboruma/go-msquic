@@ -17,8 +17,6 @@ package quic
 #cgo noescape FreeStream
 #cgo noescape AttachAppBuffer
 
-#cgo nocallback ShutdownConnection
-#cgo nocallback AbortStream
 #cgo nocallback CreateStream
 #cgo nocallback LoadListenConfiguration
 #cgo nocallback CreateListener
@@ -29,7 +27,6 @@ package quic
 #cgo nocallback MsQuicSetup
 #cgo nocallback GetRemoteAddr
 #cgo nocallback AttachAppBuffer
-#cgo nocallback FreeStream
 
 #include "c/msquic.c"
 */
@@ -263,8 +260,8 @@ func cCreateStream(c C.HQUIC, useAppBuffers C.int8_t) C.HQUIC {
 	return C.CreateStream(c, useAppBuffers)
 }
 
-func cStartStream(s C.HQUIC, fail, useAppBuffers C.int8_t) int64 {
-	return int64(C.StartStream(s, fail, useAppBuffers))
+func cStartStream(s C.HQUIC, fail, useAppBuffers C.int8_t) C.int64_t {
+	return C.StartStream(s, fail, useAppBuffers)
 }
 
 func cFreeStream(s C.HQUIC) {

@@ -14,7 +14,7 @@ import (
 // #include "inc/msquic.h"
 import "C"
 
-var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, bufFound, bufNotfound, startSucc, startFail, open, wait, read, write, release atomic.Int64
+var time1, time2, time3, time4, time5, time6, time7, time8, time9, time10, time11, time12, time13, receiveBuffers, bufFound, bufNotfound, startSucc, startErr, startFail, open, wait, read, write, release atomic.Int64
 
 func init() {
 	if os.Getenv("QUIC_DEBUG") != "" {
@@ -42,6 +42,7 @@ func init() {
 					"bufNotFound", bufNotfound.Swap(0),
 					"startSucc", startSucc.Swap(0),
 					"startFail", startFail.Swap(0),
+					"startErr", startErr.Swap(0),
 					"open:", open.Load(),
 					"wait", wait.Load(),
 					"release:", release.Load(),
@@ -72,7 +73,7 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 	case listener.(MsQuicListener).acceptQueue <- res:
 		connections.Store(c, res)
 	default:
-		cAbortConnection(c)
+		cShutdownConnection(c)
 		println("WARNING rejecting connection")
 	}
 }
@@ -83,7 +84,7 @@ func closeConnectionCallback(c C.HQUIC) {
 	defer func() {
 		time2.Add(time.Since(now).Milliseconds())
 	}()
-	res, has := connections.Load(c)
+	res, has := connections.LoadAndDelete(c)
 	if !has {
 		println("PANIC close conn no conn")
 		return // already closed
@@ -116,12 +117,6 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 
 	stream := rawStream.(MsQuicStream)
 	state := stream.state
-
-	state.readAccess.RLock()
-	defer state.readAccess.RUnlock()
-	if stream.ctx.Err() != nil {
-		return 0
-	}
 
 	n := C.uint32_t(0)
 	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
@@ -168,13 +163,10 @@ func newStreamCallback(c, s C.HQUIC) {
 	rawConn, has := connections.Load(c)
 	if !has {
 		println("PANIC new stream no conn")
-		//cAbortConnection(c)
 		cAbortStream(s)
 		return // already closed
 	}
 	conn := rawConn.(MsQuicConn)
-	conn.state.openStream.RLock()
-	defer conn.state.openStream.RUnlock()
 	if conn.ctx.Err() != nil {
 		println("PANIC new stream but closing conn")
 		cAbortStream(s)
@@ -187,6 +179,7 @@ func newStreamCallback(c, s C.HQUIC) {
 		for range initBufs {
 			err := provideAndAttachAppBuffer(s, res)
 			if err != nil {
+				println("PANIC could not attach")
 				res.releaseBuffers()
 				cAbortStream(s)
 				return
@@ -331,7 +324,6 @@ func startConnectionCallback(c C.HQUIC) {
 	select {
 	case res.(MsQuicConn).startSignal <- struct{}{}:
 	default:
-
 	}
 }
 

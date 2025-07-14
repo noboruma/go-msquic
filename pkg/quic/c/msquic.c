@@ -166,9 +166,7 @@ StreamCallback(
 				printf("[strm][%p] Stream done\n", Stream);
 			}
 			closeStreamCallback(Context, Stream);
-			if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
-				FreeStream(Stream);
-			}
+			FreeStream(Stream);
 			break;
 		default:
 			break;
@@ -232,7 +230,7 @@ CreateStream(
 	return Stream;
 }
 
-uint64_t
+int64_t
 StartStream(
 	_In_ HQUIC Stream,
 	_In_ int8_t FailOpen,
@@ -248,13 +246,12 @@ StartStream(
 	if (FailOpen == 1) {
 		flag = QUIC_STREAM_START_FLAG_FAIL_BLOCKED;
 		flag |= QUIC_STREAM_START_FLAG_IMMEDIATE;
-		flag |= QUIC_STREAM_START_FLAG_SHUTDOWN_ON_FAIL;
 	}
 
 	if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
 		printf("StreamStart failed, 0x%x!\n", Status);
 		if (FailOpen == 0) {
-			MsQuic->StreamClose(Stream);
+			FreeStream(Stream);
 		}
 		return -1;
 	}
