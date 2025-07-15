@@ -50,6 +50,7 @@ type ConnState struct {
 	remoteAddr       net.UDPAddr
 	dirtyRemote      atomic.Bool
 	shutdown         atomic.Bool
+	closingAccess    sync.Mutex
 	streams          sync.Map //map[C.HQUIC]MsQuicStream
 	remoteAddrAccess sync.RWMutex
 }
@@ -101,14 +102,18 @@ func (mqc MsQuicConn) waitStart(ctx context.Context) bool {
 }
 
 func (mqc MsQuicConn) Close() error {
+	mqc.state.closingAccess.Lock()
+	defer mqc.state.closingAccess.Unlock()
 	mqc.cancel()
 	if !mqc.state.shutdown.Swap(true) {
-		cShutdownConnection(mqc.conn)
+		cAbortConnection(mqc.conn)
 	}
 	return nil
 }
 
 func (mqc MsQuicConn) peerClose() error {
+	mqc.state.closingAccess.Lock()
+	defer mqc.state.closingAccess.Unlock()
 	mqc.cancel()
 	if !mqc.state.shutdown.Swap(true) {
 		cAbortConnection(mqc.conn)
@@ -117,6 +122,8 @@ func (mqc MsQuicConn) peerClose() error {
 }
 
 func (mqc MsQuicConn) appClose() error {
+	mqc.state.closingAccess.Lock()
+	defer mqc.state.closingAccess.Unlock()
 	mqc.state.shutdown.Store(true)
 	mqc.cancel()
 	lingering := false
