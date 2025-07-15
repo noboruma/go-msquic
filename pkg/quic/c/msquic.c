@@ -1,7 +1,7 @@
+#include <stdlib.h>
 #include <stdint.h>
 #define QUIC_API_ENABLE_PREVIEW_FEATURES 1
 #include "inc/msquic.h"
-#include <stdlib.h>
 
 #define UNREFERENCED_PARAMETER(P) (void)(P)
 
@@ -20,7 +20,6 @@ extern uint32_t newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
-extern void ackPeerStreamCallback(HQUIC,HQUIC);
 extern void startStreamCallback(HQUIC,HQUIC);
 extern void startConnectionCallback(HQUIC);
 extern void freeSendBuffer(uint8_t *);
@@ -81,7 +80,6 @@ StreamWrite(
 	QUIC_STATUS Status;
 	if (QUIC_FAILED(Status = MsQuic->StreamSend(Stream, SendBuffer, 1, QUIC_SEND_FLAG_NONE, SendBuffer))) {
 		free(SendBuffer);
-		abortStreamCallback(Connection, Stream);
 		return -1;
 	}
 	return len;

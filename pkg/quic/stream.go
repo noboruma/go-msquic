@@ -334,8 +334,7 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		m := copy(buffer, data[n:])
 		sendBuffersCount.Add(1)
 		cNoAlloc := C.uint8_t(1)
-		nn := cStreamWrite(mqs.conn, mqs.stream,
-			(*C.uint8_t)(unsafe.SliceData(buffer)),
+		nn := mqs.write((*C.uint8_t)(unsafe.SliceData(buffer)),
 			C.int64_t(m),
 			cNoAlloc)
 		runtime.KeepAlive(buffer)
@@ -347,6 +346,18 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 		n += nn
 	}
 	return int(n), nil
+}
+
+func (mqs MsQuicStream) write(cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8_t) C.int64_t {
+	mqs.state.closingAccess.Lock()
+	defer mqs.state.closingAccess.Unlock()
+	if mqs.ctx.Err() != nil {
+		return -1
+	}
+	return cStreamWrite(mqs.conn, mqs.stream,
+		cArray,
+		size,
+		noAlloc)
 }
 
 func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
@@ -367,8 +378,7 @@ func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 	}
 	var n C.int64_t
 	cNoAlloc := C.uint8_t(0)
-	n = cStreamWrite(mqs.conn, mqs.stream,
-		(*C.uint8_t)(unsafe.SliceData(data)),
+	n = mqs.write((*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
 		cNoAlloc)
 	runtime.KeepAlive(data)
@@ -397,8 +407,7 @@ func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
 		}
 	}
 	cNoAlloc := C.uint8_t(1)
-	n := cStreamWrite(mqs.conn, mqs.stream,
-		(*C.uint8_t)(unsafe.SliceData(data)),
+	n := mqs.write((*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
 		cNoAlloc)
 	runtime.KeepAlive(data)

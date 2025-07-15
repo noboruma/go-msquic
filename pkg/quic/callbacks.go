@@ -47,7 +47,7 @@ func init() {
 					"wait", wait.Load(),
 					"release:", release.Load(),
 					"read:", read.Load(),
-					"werite", write.Load())
+					"write", write.Load())
 			}
 		}()
 	}
