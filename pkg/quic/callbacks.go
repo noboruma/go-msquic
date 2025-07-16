@@ -224,7 +224,7 @@ func closeStreamCallback(c, s C.HQUIC) {
 
 	res, has := rawConn.(MsQuicConn).state.streams.LoadAndDelete(s)
 	if !has {
-		println("PANIC already close stream")
+		//println("PANIC already close stream")
 		//cAbortStream(s)
 		return // already closed
 
@@ -252,7 +252,7 @@ func abortStreamCallback(c, s C.HQUIC) {
 	conn := rawConn.(MsQuicConn)
 	res, has := conn.state.streams.Load(s)
 	if !has {
-		println("PANIC cannot find stream to abort")
+		//println("PANIC cannot find stream to abort")
 		//cAbortStream(s)
 		return // already closed
 	}
