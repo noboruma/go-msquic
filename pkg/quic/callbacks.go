@@ -216,7 +216,7 @@ func closeStreamCallback(c, s C.HQUIC) {
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
-		println("PANIC already closed connection")
+		//println("PANIC already closed connection")
 		//cAbortConnection(c)
 		//cAbortStream(s)
 		return // already closed
@@ -243,7 +243,7 @@ func abortStreamCallback(c, s C.HQUIC) {
 	}()
 	rawConn, has := connections.Load(c)
 	if !has {
-		println("PANIC already closed connection 2")
+		//println("PANIC already closed connection 2")
 		//cAbortConnection(c)
 		//cAbortStream(s)
 		return // already closed

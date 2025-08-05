@@ -37,9 +37,12 @@ type chainedBuffers struct {
 	copy            bool
 	ctx             context.Context
 	attachedBuffers *attachedBuffers
+	access          sync.Mutex
 }
 
 func (cbs *chainedBuffers) HasData() bool {
+	cbs.access.Lock()
+	defer cbs.access.Unlock()
 	return cbs.current.HasData()
 }
 
@@ -87,6 +90,8 @@ func sliceEnd(subBuf []byte) uintptr {
 }
 
 func (cbs *chainedBuffers) Clear() {
+	cbs.access.Lock()
+	defer cbs.access.Unlock()
 	cur := cbs.current
 	for cur != nil {
 		cur.noCopyReadBuffer = nil
@@ -96,6 +101,8 @@ func (cbs *chainedBuffers) Clear() {
 
 func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 	n := 0
+	cbs.access.Lock()
+	defer cbs.access.Unlock()
 	if cbs.ctx.Err() != nil {
 		return 0, io.EOF
 	}

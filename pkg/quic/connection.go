@@ -129,14 +129,20 @@ func (mqc MsQuicConn) appClose() error {
 	lingering := false
 	mqc.state.streams.Range(func(key, value any) bool {
 		lingering = true
+		value.(MsQuicStream).abortClose()
 		return false
 	})
 	if lingering {
 		println("PANIC lingering streams")
+
 	}
 
 	if len(mqc.acceptStreamQueue) != 0 {
 		println("PANIC lingering streams in queue")
+		for range len(mqc.acceptStreamQueue) {
+			s := <-mqc.acceptStreamQueue
+			s.abortClose()
+		}
 	}
 
 	return nil
