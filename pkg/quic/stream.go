@@ -570,18 +570,19 @@ func releaseSendBuffer(idx uintptr) {
 }
 
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
+	buffer := getSendBuffer()
 	for mqs.ctx.Err() == nil {
-		buffer := getSendBuffer()
 		bn, err := r.Read(buffer[:])
-		if bn != 0 && err == nil {
-			var nn int
-			nn, err = mqs.noCopyWrite(buffer[:bn])
-			n += int64(nn)
-		}
 		if err != nil {
 			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
 			releaseSendBuffer(idx)
 			return n, err
+		}
+		if bn != 0 && err == nil {
+			var nn int
+			nn, err = mqs.noCopyWrite(buffer[:bn])
+			n += int64(nn)
+			buffer = getSendBuffer()
 		}
 	}
 	return n, io.EOF
