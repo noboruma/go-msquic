@@ -310,7 +310,7 @@ func (mqs MsQuicStream) Write(data []byte) (int, error) {
 	write.Add(1)
 	defer write.Add(-1)
 	if !mqs.noAlloc {
-		return mqs.cCopyWrite(data)
+		return mqs.cWrite(data, C.uint8_t(0))
 	}
 	return mqs.goCopyWrite(data)
 }
@@ -339,7 +339,6 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 	for range bufNum {
 		buffer := getSendBuffer()
 		m := copy(buffer, data[n:])
-		sendBuffersCount.Add(1)
 		cNoAlloc := C.uint8_t(1)
 		nn := mqs.write((*C.uint8_t)(unsafe.SliceData(buffer)),
 			C.int64_t(m),
@@ -367,7 +366,8 @@ func (mqs MsQuicStream) write(cArray *C.uint8_t, size C.int64_t, noAlloc C.uint8
 		noAlloc)
 }
 
-func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
+func (mqs MsQuicStream) cWrite(data []byte, cNoAlloc C.uint8_t) (int, error) {
+	bytesRead.Add(uint64(len(data)))
 	now := time.Now()
 	defer func() {
 		time9.Add(time.Since(now).Milliseconds())
@@ -383,42 +383,11 @@ func (mqs MsQuicStream) cCopyWrite(data []byte) (int, error) {
 			return 0, os.ErrDeadlineExceeded
 		}
 	}
-	var n C.int64_t
-	cNoAlloc := C.uint8_t(0)
-	n = mqs.write((*C.uint8_t)(unsafe.SliceData(data)),
-		C.int64_t(len(data)),
-		cNoAlloc)
-	runtime.KeepAlive(data)
-	if n == -1 {
-		return 0, fmt.Errorf("write stream error %v", len(data))
-	}
-	return int(n), nil
-}
-
-// copyLessWrite is exclusively used by ReadFrom
-// We optimize away the extra copy needed when we skip C alloc
-func (mqs MsQuicStream) noCopyWrite(data []byte) (int, error) {
-	now := time.Now()
-	defer func() {
-		time9.Add(time.Since(now).Milliseconds())
-	}()
-	state := mqs.state
-	ctx := mqs.ctx
-	if ctx.Err() != nil {
-		return 0, io.EOF
-	}
-	deadline := state.writeDeadline
-	if !deadline.IsZero() {
-		if time.Now().After(deadline) {
-			return 0, os.ErrDeadlineExceeded
-		}
-	}
-	cNoAlloc := C.uint8_t(1)
 	n := mqs.write((*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
 		cNoAlloc)
 	runtime.KeepAlive(data)
-	if n == -1 {
+	if n == C.int64_t(-1) {
 		return 0, fmt.Errorf("write stream error %v", len(data))
 	}
 	return int(n), nil
@@ -532,7 +501,7 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
 			var nn int
-			nn, err = mqs.cCopyWrite(buffer[:bn])
+			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(0))
 			n += int64(nn)
 		}
 		if err != nil {
@@ -569,22 +538,27 @@ func releaseSendBuffer(idx uintptr) {
 	}
 }
 
+var bytesRead atomic.Uint64
+
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	buffer := getSendBuffer()
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
+		if bn != 0 && err == nil {
+			var nn int
+			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(1))
+			n += int64(nn)
+		}
 		if err != nil {
 			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
 			releaseSendBuffer(idx)
 			return n, err
-		}
-		if bn != 0 && err == nil {
-			var nn int
-			nn, err = mqs.noCopyWrite(buffer[:bn])
-			n += int64(nn)
+		} else if bn > 0 {
 			buffer = getSendBuffer()
 		}
 	}
+	idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
+	releaseSendBuffer(idx)
 	return n, io.EOF
 }
 
