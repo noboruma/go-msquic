@@ -17,6 +17,7 @@
 extern void newConnectionCallback(HQUIC, HQUIC);
 extern void newStreamCallback(HQUIC, HQUIC);
 extern uint32_t newReadCallback(HQUIC, HQUIC, const QUIC_BUFFER*, uint32_t len);
+extern void provideNewBuffersCallback(HQUIC, HQUIC, uint64_t need);
 extern void closeConnectionCallback(HQUIC);
 extern void closePeerConnectionCallback(HQUIC);
 extern void closeStreamCallback(HQUIC,HQUIC);
@@ -142,6 +143,9 @@ StreamCallback(
 					return QUIC_STATUS_PENDING;
 				}
 			}
+			break;
+		case QUIC_STREAM_EVENT_RECEIVE_BUFFER_NEEDED:
+			provideNewBuffersCallback(Context, Stream, Event->RECEIVE_BUFFER_NEEDED.BufferLengthNeeded);
 			break;
 		case QUIC_STREAM_EVENT_PEER_RECEIVE_ABORTED:
 			break;

@@ -141,19 +141,46 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	default:
 	}
 	if conn.useAppBuffers {
-		state.recvCount.Add(uint32(n))
-		if state.needMoreBuffer() {
-			err := provideAndAttachAppBuffer(s, stream)
-			if err != nil {
-				//abortStreamCallback(c, s)
-				return 0
-			}
-		}
+		//state.recvCount.Add(uint32(n))
+		//if state.needMoreBuffer() {
+		//	err := provideAndAttachAppBuffer(s, stream)
+		//	if err != nil {
+		//		//abortStreamCallback(c, s)
+		//		return 0
+		//	}
+		//}
 	} else {
 		n = 0
 	}
 	return n
 }
+
+//export provideNewBuffersCallback
+func provideNewBuffersCallback(c, s C.HQUIC, need C.uint64_t) {
+
+	rawConn, has := connections.Load(c)
+	if !has {
+		println("PANIC provide buffer no conn")
+		return // already closed
+	}
+	conn := rawConn.(MsQuicConn)
+	rawStream, has := conn.state.streams.Load(s)
+	if !has {
+		println("PANIC provide buffer no stream")
+		return // already closed
+	}
+
+	stream := rawStream.(MsQuicStream)
+	negNeed := int64(need)
+	for negNeed > 0 {
+		n, err := provideAndAttachAppBuffer(s, stream)
+		if err != nil {
+			return
+		}
+		negNeed -= n
+	}
+}
+
 
 //export newStreamCallback
 func newStreamCallback(c, s C.HQUIC) {
@@ -178,7 +205,7 @@ func newStreamCallback(c, s C.HQUIC) {
 
 	if conn.useAppBuffers {
 		for range initBufs {
-			err := provideAndAttachAppBuffer(s, res)
+			_, err := provideAndAttachAppBuffer(s, res)
 			if err != nil {
 				println("PANIC could not attach")
 				res.releaseBuffers()
@@ -200,13 +227,13 @@ func newStreamCallback(c, s C.HQUIC) {
 
 var attachErr = errors.New("buffer attach error")
 
-func provideAndAttachAppBuffer(s C.HQUIC, res MsQuicStream) error {
+func provideAndAttachAppBuffer(s C.HQUIC, res MsQuicStream) (int64, error) {
 	initBuf := provideAppBuffer(res)
 	if initBuf == nil || cAttachAppBuffer(s, initBuf) == -1 {
-		return attachErr
+		return 0, attachErr
 	}
 	res.state.recvTotal.Add(uint32(len(initBuf)))
-	return nil
+	return int64(len(initBuf)), nil
 }
 
 //export closeStreamCallback
