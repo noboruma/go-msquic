@@ -45,6 +45,7 @@ struct QUICConfig {
 	int EnableDatagramReceive;
 	int DisableSendBuffering;
 	int MaxBytesPerKey;
+	char EnableMultiStream;
 };
 
 int64_t
@@ -408,6 +409,11 @@ LoadListenConfiguration(
 	if (cfg.MaxBytesPerKey != 0) {
 		Settings.MaxBytesPerKey = cfg.MaxBytesPerKey;
 		Settings.IsSet.MaxBytesPerKey = TRUE;
+	}
+
+	if (cfg.EnableMultiStream != 0) {
+		Settings.StreamMultiReceiveEnabled = TRUE;
+		Settings.IsSet.StreamMultiReceiveEnabled = TRUE;
 	}
 
 	QUIC_CREDENTIAL_CONFIG_HELPER config = {0};

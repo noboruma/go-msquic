@@ -144,6 +144,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		EnableDatagramReceive:         enableDatagram,
 		DisableSendBuffering:          disableSendBuffering,
 		MaxBytesPerKey:                C.int(cfg.MaxBytesPerKey),
+		EnableMultiStream:             C.char(cfg.EnableStreamMultiReceive),
 	})
 
 	if config == nil {

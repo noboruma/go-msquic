@@ -19,6 +19,7 @@ type MsQuicListener struct {
 	failOnOpenStream bool
 	noAllocStream    bool
 	appBuffers       bool
+	multiReceives    bool
 }
 
 func newMsQuicListener(c C.HQUIC, config C.HQUIC, key, cert, alpn *C.char, failOnOpenStream, noAlloc, appBuffers bool) MsQuicListener {
