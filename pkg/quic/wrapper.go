@@ -130,6 +130,10 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	if cfg.DisableSendBuffering {
 		disableSendBuffering = C.int(1)
 	}
+	enableMultiStream := C.char(0)
+	if cfg.EnableStreamMultiReceive {
+		enableMultiStream = C.char(1)
+	}
 	config := C.LoadListenConfiguration(C.struct_QUICConfig{
 		DisableCertificateValidation: 1,
 		MaxBidiStreams:               C.int(cfg.MaxIncomingStreams),
@@ -144,7 +148,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 		EnableDatagramReceive:         enableDatagram,
 		DisableSendBuffering:          disableSendBuffering,
 		MaxBytesPerKey:                C.int(cfg.MaxBytesPerKey),
-		EnableMultiStream:             C.char(cfg.EnableStreamMultiReceive),
+		EnableMultiStream:             enableMultiStream,
 	})
 
 	if config == nil {
