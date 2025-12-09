@@ -409,7 +409,7 @@ func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 	} else {
 		mqs.state.readDeadlineContext = mqs.ctx
 	}
-	return nil
+	return mqs.state.readDeadlineContext.Err()
 }
 
 func (mqs MsQuicStream) SetWriteDeadline(ttl time.Time) error {
