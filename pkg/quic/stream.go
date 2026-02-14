@@ -460,8 +460,8 @@ func (mqs MsQuicStream) sendClose() error {
 func (mqs MsQuicStream) abortClose() error {
 	mqs.state.closingAccess.Lock()
 	defer mqs.state.closingAccess.Unlock()
+	mqs.cancel()
 	if !mqs.state.shutdown.Swap(true) {
-		mqs.cancel()
 		cAbortStream(mqs.stream)
 	}
 	return nil
