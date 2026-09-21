@@ -198,6 +198,10 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	if mqc.failOpenStream {
 		if !res.waitStart() {
 			startFail.Add(1)
+			if _, has := mqc.state.streams.LoadAndDelete(stream); has {
+				res.releaseBuffers()
+				cFreeStream(stream)
+			}
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}
 	}
