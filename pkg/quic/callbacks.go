@@ -423,7 +423,10 @@ func newDatagramCallback(c C.HQUIC, recvBuffer *C.QUIC_BUFFER) {
 	msg := make([]byte, recvBuffer.Length)
 	copy(msg, subBuf)
 
-	conn.datagrams <- msg
+	select {
+	case conn.datagrams <- msg:
+	default:
+	}
 }
 
 //export closePeerConnectionCallback

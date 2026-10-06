@@ -103,9 +103,6 @@ func (cbs *chainedBuffers) Read(output []byte) (int, error) {
 	n := 0
 	cbs.access.Lock()
 	defer cbs.access.Unlock()
-	if cbs.ctx.Err() != nil {
-		return 0, io.EOF
-	}
 	for {
 		if cbs.current.empty.Load() {
 			next := cbs.current.next.Swap(nil)
@@ -186,6 +183,7 @@ type streamState struct {
 	readDeadlineCancel  context.CancelFunc
 
 	attachedRecvBuffers attachedBuffers
+	pendingRelease      atomic.Bool
 
 	closingAccess sync.Mutex
 }
@@ -242,6 +240,7 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 	}
 	res.state.readBuffers.current = &chainedBuffer{}
 	res.state.readBuffers.tail = res.state.readBuffers.current
+	res.state.readBuffers.current.empty.Store(true)
 	res.state.readBuffers.ctx = ctx
 	res.state.readBuffers.attachedBuffers = &res.state.attachedRecvBuffers
 	return res
@@ -259,36 +258,47 @@ func (mqs MsQuicStream) waitStart() bool {
 func (mqs MsQuicStream) Read(data []byte) (int, error) {
 	read.Add(1)
 	defer read.Add(-1)
+
+	if len(data) == 0 {
+		return 0, nil
+	}
+
 	now := time.Now()
 	defer func() {
 		time10.Add(time.Since(now).Milliseconds())
 	}()
-	state := mqs.state
-	if mqs.state.readShutdown.Load() {
-		return 0, io.EOF
-	}
-	if !state.hasReadData() {
-		if mqs.ctx.Err() != nil {
-			time11.Add(time.Since(now).Milliseconds())
+	for {
+		if mqs.state.readShutdown.Load() {
 			return 0, io.EOF
 		}
+		if !mqs.state.hasReadData() {
+			if mqs.ctx.Err() != nil {
+				time11.Add(time.Since(now).Milliseconds())
+				return 0, mqs.eof()
+			}
 
-		ctx := state.readDeadlineContext
-		if !mqs.waitRead(ctx) {
-			time11.Add(time.Since(now).Milliseconds())
-			if state.readDeadlineCancel != nil {
-				state.readDeadlineCancel()
-				state.readDeadlineCancel = nil
+			ctx := mqs.state.readDeadlineContext
+			if !mqs.waitRead(ctx) {
+				time11.Add(time.Since(now).Milliseconds())
+				if mqs.state.readDeadlineCancel != nil {
+					mqs.state.readDeadlineCancel()
+					mqs.state.readDeadlineCancel = nil
+				}
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					return 0, os.ErrDeadlineExceeded
+				}
+				if mqs.state.hasReadData() {
+					continue
+				}
+				return 0, mqs.eof()
 			}
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				return 0, os.ErrDeadlineExceeded
-			}
-			return 0, io.EOF
+			time12.Add(time.Since(now).Milliseconds())
 		}
-		time12.Add(time.Since(now).Milliseconds())
-	}
 
-	return state.readBuffers.Read(data)
+		if n, err := mqs.state.readBuffers.Read(data); n > 0 || err != nil {
+			return n, err
+		}
+	}
 }
 
 func (mqs MsQuicStream) waitRead(ctx context.Context) bool {
@@ -409,7 +419,7 @@ func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 	} else {
 		mqs.state.readDeadlineContext = mqs.ctx
 	}
-	return mqs.state.readDeadlineContext.Err()
+	return nil
 }
 
 func (mqs MsQuicStream) SetWriteDeadline(ttl time.Time) error {
@@ -438,7 +448,12 @@ func (mqs MsQuicStream) release() error {
 	mqs.state.closingAccess.Lock()
 	defer mqs.state.closingAccess.Unlock()
 	mqs.state.shutdown.Store(true)
+	aborted := mqs.state.shutdown.Swap(true)
 	mqs.cancel()
+	if !aborted && mqs.state.readBuffers.HasData() {
+		mqs.state.pendingRelease.Store(true)
+		return nil
+	}
 	mqs.releaseBuffers()
 	return nil
 }
@@ -464,7 +479,17 @@ func (mqs MsQuicStream) abortClose() error {
 	if !mqs.state.shutdown.Swap(true) {
 		cAbortStream(mqs.stream)
 	}
+	if mqs.state.pendingRelease.Swap(false) {
+		mqs.releaseBuffers()
+	}
 	return nil
+}
+
+func (mqs MsQuicStream) eof() error {
+	if mqs.state.pendingRelease.Swap(false) {
+		mqs.releaseBuffers()
+	}
+	return io.EOF
 }
 
 func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
@@ -500,9 +525,15 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
 		if bn != 0 {
-			var nn int
+			var (
+				nn   int
+				err2 error
+			)
 			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(0))
 			n += int64(nn)
+			if err == nil {
+				err = err2
+			}
 		}
 		if err != nil {
 			return n, err
@@ -544,10 +575,16 @@ func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	buffer := getSendBuffer()
 	for mqs.ctx.Err() == nil {
 		bn, err := r.Read(buffer[:])
-		if bn != 0 && err == nil {
-			var nn int
+		if bn != 0 {
+			var (
+				nn   int
+				err2 error
+			)
 			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(1))
 			n += int64(nn)
+			if err == nil {
+				err = err2
+			}
 		}
 		if err != nil {
 			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
@@ -566,10 +603,10 @@ var sendBuffers sync.Map //map[uintptr]escapingBuffer
 var recvBuffers sync.Map //map[uintptr]escapingBuffer
 
 func (res MsQuicStream) releaseBuffers() {
+	res.state.readBuffers.Clear()
 
 	res.state.attachedRecvBuffers.access.Lock()
 	defer res.state.attachedRecvBuffers.access.Unlock()
-	res.state.readBuffers.Clear()
 	for _, buf := range res.state.attachedRecvBuffers.buffers {
 		freeRecvBuffer(buf.end)
 	}
