@@ -194,7 +194,6 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 				cFreeStream(stream)
 				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
 			}
-			res.state.recvTotal.Add(uint32(len(initBuf)))
 		}
 	}
 
