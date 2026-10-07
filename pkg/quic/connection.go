@@ -111,8 +111,6 @@ func (mqc MsQuicConn) Close() error {
 }
 
 func (mqc MsQuicConn) peerClose() error {
-	mqc.state.closingAccess.Lock()
-	defer mqc.state.closingAccess.Unlock()
 	mqc.cancel()
 	if !mqc.state.shutdown.Swap(true) {
 		cAbortConnection(mqc.conn)
@@ -125,18 +123,12 @@ func (mqc MsQuicConn) appClose() error {
 	defer mqc.state.closingAccess.Unlock()
 	mqc.state.shutdown.Store(true)
 	mqc.cancel()
-	lingering := false
 	mqc.state.streams.Range(func(key, value any) bool {
-		lingering = true
 		value.(MsQuicStream).state.shutdown.Store(true)
 		value.(MsQuicStream).release()
 		mqc.state.streams.Delete(key)
 		return true
 	})
-	if lingering {
-		println("PANIC lingering streams")
-
-	}
 
 loop:
 	for {
@@ -190,8 +182,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 				m.Unlock()
 				m = nil
 				mqc.state.streams.Delete(stream)
-				res.releaseBuffers()
 				cFreeStream(stream)
+				res.releaseBuffers()
 				return MsQuicStream{}, fmt.Errorf("stream buffer attach error")
 			}
 		}
@@ -201,8 +193,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		m.Unlock()
 		m = nil
 		if _, has := mqc.state.streams.LoadAndDelete(stream); has {
-			res.releaseBuffers()
 			cFreeStream(stream)
+			res.releaseBuffers()
 		}
 		startErr.Add(1)
 		return MsQuicStream{}, fmt.Errorf("stream start error")
@@ -212,10 +204,7 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		m = nil
 		if !res.waitStart() {
 			startFail.Add(1)
-			if _, has := mqc.state.streams.LoadAndDelete(stream); has {
-				res.releaseBuffers()
-				cFreeStream(stream)
-			}
+			res.abortClose()
 			return MsQuicStream{}, fmt.Errorf("stream start failed")
 		}
 	}

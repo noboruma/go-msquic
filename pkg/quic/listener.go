@@ -41,9 +41,14 @@ func (mql MsQuicListener) Close() error {
 
 	if !mql.shutdown.Swap(true) {
 		cCloseListener(mql.listener, mql.config)
+		listeners.Delete(mql.listener)
 		C.free(unsafe.Pointer(mql.key))
 		C.free(unsafe.Pointer(mql.cert))
 		C.free(unsafe.Pointer(mql.alpn))
+		close(mql.acceptQueue)
+		for c := range mql.acceptQueue {
+			c.Close()
+		}
 	}
 	return nil
 }

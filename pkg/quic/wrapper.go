@@ -26,7 +26,6 @@ package quic
 #cgo nocallback StartConnection
 #cgo nocallback MsQuicSetup
 #cgo nocallback GetRemoteAddr
-#cgo nocallback AttachAppBuffer
 
 #include "c/msquic.c"
 */
@@ -166,6 +165,7 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 
 	status := C.StartListener(listener, cAddr, C.uint16_t(portInt), buffer)
 	if status != 0 {
+		res.Close()
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
 
@@ -227,7 +227,7 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		println("PANIC already registered connection")
 	}
 
-	C.StartConnection(conn, cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
+	status := C.StartConnection(conn, cAddr, C.uint16_t(portInt), C.struct_QUICConfig{
 		DisableCertificateValidation:  1,
 		MaxBidiStreams:                C.int(cfg.MaxIncomingStreams),
 		IdleTimeoutMs:                 C.int(cfg.MaxIdleTimeout.Milliseconds()),
@@ -239,8 +239,15 @@ func DialAddr(ctx context.Context, addr string, cfg Config) (MsQuicConn, error) 
 		DisableSendBuffering:          disableBuffering,
 	})
 
+	if status != 0 {
+		connections.Delete(conn)
+		res.cancel()
+		return MsQuicConn{}, fmt.Errorf("failed to start connection")
+	}
+
 	if !res.waitStart(ctx) {
-		return res, fmt.Errorf("failed to start: %v", ctx.Err())
+		res.Close()
+		return MsQuicConn{}, fmt.Errorf("failed to start: %v", ctx.Err())
 	}
 	return res, nil
 }
@@ -289,9 +296,24 @@ func cDatagramSendConnection(c C.HQUIC, msg []byte) C.int32_t {
 	}
 	pinner := runtime.Pinner{}
 	pinner.Pin(buffer)
-	pinner.Pin(unsafe.SliceData(msg))
-	defer pinner.Unpin()
-	return C.DatagramSendConnection(c, buffer)
+	if len(msg) > 0 {
+		pinner.Pin(unsafe.SliceData(msg))
+	}
+	key := uintptr(unsafe.Pointer(buffer))
+	datagramBuffers.Store(key, &pinner)
+	status := C.DatagramSendConnection(c, buffer)
+	if status != 0 {
+		releaseDatagramBuffer(key)
+	}
+	return status
+}
+
+var datagramBuffers sync.Map
+
+func releaseDatagramBuffer(key uintptr) {
+	if p, has := datagramBuffers.LoadAndDelete(key); has {
+		p.(*runtime.Pinner).Unpin()
+	}
 }
 
 func cAttachAppBuffer(s C.HQUIC, buffer []byte) C.int32_t {

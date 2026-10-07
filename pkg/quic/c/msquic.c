@@ -26,8 +26,8 @@ extern void startConnectionCallback(HQUIC);
 extern void freeSendBuffer(uint8_t*);
 extern void newDatagramCallback(HQUIC, const QUIC_BUFFER*);
 extern void abortStreamCallback(HQUIC, HQUIC);
-extern void shutConnectionCallback(HQUIC);
 extern void peerAddressChangedCallback(HQUIC);
+extern void freeDatagramBuffer(void*);
 
 HQUIC Registration = NULL;
 const QUIC_API_TABLE* MsQuic = NULL;
@@ -157,7 +157,9 @@ _IRQL_requires_max_(DISPATCH_LEVEL) _Function_class_(QUIC_STREAM_CALLBACK) QUIC_
                 printf("[strm][%p] Stream done\n", Stream);
             }
             closeStreamCallback(Context, Stream);
-            FreeStream(Stream);
+            if (!Event->SHUTDOWN_COMPLETE.AppCloseInProgress) {
+                FreeStream(Stream);
+            }
             break;
         default:
             break;
@@ -185,7 +187,7 @@ void AbortConnection(HQUIC connection) {
 int32_t DatagramSendConnection(HQUIC connection, QUIC_BUFFER* buffer) {
     QUIC_STATUS Status;
     if (QUIC_FAILED(Status =
-                        MsQuic->DatagramSend(connection, buffer, 1, QUIC_SEND_FLAG_NONE, NULL))) {
+                        MsQuic->DatagramSend(connection, buffer, 1, QUIC_SEND_FLAG_NONE, buffer))) {
         printf("failed to send datagram: %d", Status);
         return -1;
     }
@@ -294,6 +296,12 @@ _IRQL_requires_max_(DISPATCH_LEVEL) _Function_class_(QUIC_CONNECTION_CALLBACK) Q
         case QUIC_CONNECTION_EVENT_DATAGRAM_RECEIVED:
             newDatagramCallback(Connection, Event->DATAGRAM_RECEIVED.Buffer);
             break;
+        case QUIC_CONNECTION_EVENT_DATAGRAM_SEND_STATE_CHANGED:
+            if (QUIC_DATAGRAM_SEND_STATE_IS_FINAL(Event->DATAGRAM_SEND_STATE_CHANGED.State) &&
+                Event->DATAGRAM_SEND_STATE_CHANGED.ClientContext) {
+                freeDatagramBuffer(Event->DATAGRAM_SEND_STATE_CHANGED.ClientContext);
+            }
+            break;
         default:
             break;
     }
@@ -310,15 +318,15 @@ _IRQL_requires_max_(PASSIVE_LEVEL) _Function_class_(QUIC_LISTENER_CALLBACK) QUIC
             if (LOGS_ENABLED) {
                 printf("[conn][%p] new connection\n", Event->NEW_CONNECTION.Connection);
             }
-            newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
             MsQuic->SetCallbackHandler(Event->NEW_CONNECTION.Connection, (void*)ConnectionCallback,
                                        Context);
             Status = MsQuic->ConnectionSetConfiguration(Event->NEW_CONNECTION.Connection,
                                                         (HQUIC)Context);
             if (QUIC_FAILED(Status)) {
                 printf("[conn][%p] new connection failed\n", Event->NEW_CONNECTION.Connection);
-                shutConnectionCallback(Event->NEW_CONNECTION.Connection);
+                break;
             }
+            newConnectionCallback(Listener, Event->NEW_CONNECTION.Connection);
             break;
         default:
             break;
@@ -381,7 +389,7 @@ LoadListenConfiguration(_In_ struct QUICConfig cfg) {
     }
 
     Settings.StreamRecvBufferDefault = 8 * 1024;
-    Settings.IsSet.StreamMultiReceiveEnabled = TRUE;
+    Settings.IsSet.StreamRecvBufferDefault = TRUE;
 
     Settings.MaxOperationsPerDrain = 64;
     Settings.IsSet.MaxOperationsPerDrain = TRUE;
@@ -496,6 +504,7 @@ LoadDialConfiguration(struct QUICConfig cfg) {
 
     if (QUIC_FAILED(Status = MsQuic->ConfigurationLoadCredential(configuration, &CredConfig))) {
         printf("ConfigurationLoadCredential failed, 0x%x!\n", Status);
+        MsQuic->ConfigurationClose(configuration);
         return NULL;
     }
 
@@ -516,16 +525,17 @@ OpenConnection() {
     return connection;
 }
 
-void StartConnection(_In_ HQUIC connection,
-                     _In_ const char* addr,
-                     _In_ uint16_t port,
-                     _In_ struct QUICConfig cfg) {
+int StartConnection(_In_ HQUIC connection,
+                    _In_ const char* addr,
+                    _In_ uint16_t port,
+                    _In_ struct QUICConfig cfg) {
     QUIC_STATUS Status;
 
     HQUIC configuration = LoadDialConfiguration(cfg);
     if (!configuration) {
         printf("Connection Load dial error!\n");
-        return;
+        MsQuic->ConnectionClose(connection);
+        return -1;
     }
 
     Status =
@@ -534,7 +544,9 @@ void StartConnection(_In_ HQUIC connection,
     if (QUIC_FAILED(Status)) {
         printf("ConnectionStart failed, 0x%x!\n", Status);
         MsQuic->ConnectionClose(connection);
+        return -1;
     }
+    return 0;
 }
 
 static const QUIC_REGISTRATION_CONFIG RegConfig = {"go-msquic", QUIC_EXECUTION_PROFILE_LOW_LATENCY};

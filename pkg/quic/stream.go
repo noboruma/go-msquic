@@ -177,12 +177,13 @@ type escapingBuffer struct {
 }
 
 type streamState struct {
-	readBuffers   chainedBuffers
-	writeDeadline time.Time
-	startSignal   chan struct{}
-	shutdown      atomic.Bool
-	readShutdown  atomic.Bool
+	readBuffers  chainedBuffers
+	startSignal  chan struct{}
+	shutdown     atomic.Bool
+	readShutdown atomic.Bool
 
+	deadlineAccess      sync.Mutex
+	writeDeadline       time.Time
 	readDeadlineContext context.Context
 	readDeadlineCancel  context.CancelFunc
 
@@ -204,6 +205,18 @@ type sliceAddresses struct {
 
 func (ss *streamState) hasReadData() bool {
 	return ss.readBuffers.HasData()
+}
+
+func (ss *streamState) readContext() context.Context {
+	ss.deadlineAccess.Lock()
+	defer ss.deadlineAccess.Unlock()
+	return ss.readDeadlineContext
+}
+
+func (ss *streamState) writeDeadlineExceeded() bool {
+	ss.deadlineAccess.Lock()
+	defer ss.deadlineAccess.Unlock()
+	return !ss.writeDeadline.IsZero() && time.Now().After(ss.writeDeadline)
 }
 
 type MsQuicStream struct {
@@ -276,17 +289,13 @@ func (mqs MsQuicStream) Read(data []byte) (int, error) {
 				return 0, mqs.eof()
 			}
 
-			ctx := mqs.state.readDeadlineContext
+			ctx := mqs.state.readContext()
 			if !mqs.waitRead(ctx) {
 				time11.Add(time.Since(now).Milliseconds())
-				if mqs.state.readDeadlineCancel != nil {
-					mqs.state.readDeadlineCancel()
-					mqs.state.readDeadlineCancel = nil
-				}
 				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 					return 0, os.ErrDeadlineExceeded
 				}
-				if mqs.state.hasReadData() {
+				if mqs.state.hasReadData() || mqs.ctx.Err() == nil {
 					continue
 				}
 				return 0, mqs.eof()
@@ -329,16 +338,11 @@ func (mqs MsQuicStream) goCopyWrite(data []byte) (int, error) {
 	defer func() {
 		time9.Add(time.Since(now).Milliseconds())
 	}()
-	state := mqs.state
-	ctx := mqs.ctx
-	if ctx.Err() != nil {
+	if mqs.ctx.Err() != nil {
 		return 0, io.EOF
 	}
-	deadline := state.writeDeadline
-	if !deadline.IsZero() {
-		if time.Now().After(deadline) {
-			return 0, os.ErrDeadlineExceeded
-		}
+	if mqs.state.writeDeadlineExceeded() {
+		return 0, os.ErrDeadlineExceeded
 	}
 	var n C.int64_t
 	bufNum := len(data) / sendBufferSize
@@ -381,16 +385,11 @@ func (mqs MsQuicStream) cWrite(data []byte, cNoAlloc C.uint8_t) (int, error) {
 	defer func() {
 		time9.Add(time.Since(now).Milliseconds())
 	}()
-	state := mqs.state
-	ctx := mqs.ctx
-	if ctx.Err() != nil {
+	if mqs.ctx.Err() != nil {
 		return 0, io.EOF
 	}
-	deadline := state.writeDeadline
-	if !deadline.IsZero() {
-		if time.Now().After(deadline) {
-			return 0, os.ErrDeadlineExceeded
-		}
+	if mqs.state.writeDeadlineExceeded() {
+		return 0, os.ErrDeadlineExceeded
 	}
 	n := mqs.write((*C.uint8_t)(unsafe.SliceData(data)),
 		C.int64_t(len(data)),
@@ -409,6 +408,8 @@ func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
 }
 
 func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
+	mqs.state.deadlineAccess.Lock()
+	defer mqs.state.deadlineAccess.Unlock()
 	if mqs.state.readDeadlineCancel != nil {
 		mqs.state.readDeadlineCancel()
 		mqs.state.readDeadlineCancel = nil
@@ -422,6 +423,8 @@ func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 }
 
 func (mqs MsQuicStream) SetWriteDeadline(ttl time.Time) error {
+	mqs.state.deadlineAccess.Lock()
+	defer mqs.state.deadlineAccess.Unlock()
 	mqs.state.writeDeadline = ttl
 	return nil
 }
@@ -563,6 +566,7 @@ func getSendBuffer() []byte {
 		goBuffer: buf,
 		pinner:   pinner,
 	}); loaded {
+		pinner.Unpin()
 		println("PANIC send buffer corruption")
 	}
 	sendBuffersSize.Add(1)

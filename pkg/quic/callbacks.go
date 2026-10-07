@@ -70,10 +70,11 @@ func newConnectionCallback(l C.HQUIC, c C.HQUIC) {
 		listener.(MsQuicListener).noAllocStream,
 		listener.(MsQuicListener).appBuffers)
 
+	connections.Store(c, res)
 	select {
 	case listener.(MsQuicListener).acceptQueue <- res:
-		connections.Store(c, res)
 	default:
+		connections.Delete(c)
 		cShutdownConnection(c)
 		println("WARNING rejecting connection")
 	}
@@ -281,23 +282,6 @@ func abortStreamCallback(c, s C.HQUIC) {
 	res.(MsQuicStream).abortClose()
 }
 
-//export shutConnectionCallback
-func shutConnectionCallback(c C.HQUIC) {
-	now := time.Now()
-
-	defer func() {
-		time6.Add(time.Since(now).Milliseconds())
-	}()
-	rawConn, has := connections.Load(c)
-	if !has {
-		println("PANIC already closed connection 3")
-		return // already closed
-	}
-
-	conn := rawConn.(MsQuicConn)
-	conn.Close()
-}
-
 //export startStreamCallback
 func startStreamCallback(c, s C.HQUIC) {
 
@@ -351,6 +335,11 @@ func startConnectionCallback(c C.HQUIC) {
 //export freeSendBuffer
 func freeSendBuffer(idx uintptr) {
 	releaseSendBuffer(idx)
+}
+
+//export freeDatagramBuffer
+func freeDatagramBuffer(ctx unsafe.Pointer) {
+	releaseDatagramBuffer(uintptr(ctx))
 }
 
 const defaultReceiveBufferSize = 32 * 1024
