@@ -229,9 +229,6 @@ int64_t StartStream(_In_ HQUIC Stream, _In_ int8_t FailOpen, _In_ int8_t useAppB
 
     if (QUIC_FAILED(Status = MsQuic->StreamStart(Stream, flag))) {
         printf("StreamStart failed, 0x%x!\n", Status);
-        if (FailOpen == 0) {
-            FreeStream(Stream);
-        }
         return -1;
     }
     return 0;
@@ -408,6 +405,7 @@ LoadListenConfiguration(_In_ struct QUICConfig cfg) {
     }
     if (QUIC_FAILED(Status =
                         MsQuic->ConfigurationLoadCredential(configuration, &config.CredConfig))) {
+        MsQuic->ConfigurationClose(configuration);
         printf("ConfigurationLoadCredential failed, 0x%x!\n", Status);
         return NULL;
     }
@@ -530,11 +528,12 @@ void StartConnection(_In_ HQUIC connection,
         return;
     }
 
-    if (QUIC_FAILED(Status = MsQuic->ConnectionStart(connection, configuration,
-                                                     QUIC_ADDRESS_FAMILY_UNSPEC, addr, port))) {
+    Status =
+        MsQuic->ConnectionStart(connection, configuration, QUIC_ADDRESS_FAMILY_UNSPEC, addr, port);
+    MsQuic->ConfigurationClose(configuration);
+    if (QUIC_FAILED(Status)) {
         printf("ConnectionStart failed, 0x%x!\n", Status);
         MsQuic->ConnectionClose(connection);
-        return;
     }
 }
 

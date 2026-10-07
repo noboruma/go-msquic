@@ -154,6 +154,13 @@ loop:
 }
 
 func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
+	m := &mqc.state.closingAccess
+	m.Lock()
+	defer func() {
+		if m != nil {
+			m.Unlock()
+		}
+	}()
 	open.Add(1)
 	defer open.Add(-1)
 
@@ -200,6 +207,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		return MsQuicStream{}, fmt.Errorf("stream start error")
 	}
 	if mqc.failOpenStream {
+		m.Unlock()
+		m = nil
 		if !res.waitStart() {
 			startFail.Add(1)
 			if _, has := mqc.state.streams.LoadAndDelete(stream); has {
@@ -249,6 +258,8 @@ func (mqc MsQuicConn) DirtyRemoteAddr() bool {
 func (mqc MsQuicConn) RefreshRemoteAddr() {
 	mqc.state.remoteAddrAccess.Lock()
 	defer mqc.state.remoteAddrAccess.Unlock()
+	mqc.state.closingAccess.Lock()
+	defer mqc.state.closingAccess.Unlock()
 	if !mqc.state.shutdown.Load() {
 		ip, port := getRemoteAddr(mqc.conn)
 		mqc.state.remoteAddr.IP = ip
@@ -268,6 +279,8 @@ func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 }
 
 func (c MsQuicConn) SendDatagram(msg []byte) error {
+	c.state.closingAccess.Lock()
+	defer c.state.closingAccess.Unlock()
 	if cDatagramSendConnection(c.conn, msg) != 0 {
 		return fmt.Errorf("error encountered while sending datagram")
 	}

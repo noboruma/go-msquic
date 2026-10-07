@@ -450,7 +450,6 @@ func (mqs MsQuicStream) release() error {
 	defer release.Add(-1)
 	mqs.state.closingAccess.Lock()
 	defer mqs.state.closingAccess.Unlock()
-	mqs.state.shutdown.Store(true)
 	aborted := mqs.state.shutdown.Swap(true)
 	mqs.cancel()
 	if !aborted && mqs.state.readBuffers.HasData() {
@@ -540,7 +539,7 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 				nn   int
 				err2 error
 			)
-			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(0))
+			nn, err2 = mqs.cWrite(buffer[:bn], C.uint8_t(0))
 			n += int64(nn)
 			if err == nil {
 				err = err2
@@ -578,8 +577,6 @@ func releaseSendBuffer(idx uintptr) {
 		v.pinner.Unpin()
 		sendBufferPool.Put(v.goBuffer)
 		sendBuffersSize.Add(-1)
-	} else {
-		println("PANIC no buffer to free")
 	}
 }
 
