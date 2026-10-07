@@ -226,7 +226,6 @@ func provideAndAttachAppBuffer(s C.HQUIC, res MsQuicStream) (int64, error) {
 	if initBuf == nil || cAttachAppBuffer(s, initBuf) == -1 {
 		return 0, attachErr
 	}
-	res.state.recvTotal.Add(uint32(len(initBuf)))
 	return int64(len(initBuf)), nil
 }
 
