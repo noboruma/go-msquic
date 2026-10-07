@@ -121,13 +121,17 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 
 	n := C.uint32_t(0)
 	for _, buffer := range unsafe.Slice(recvBuffers, bufferCount) {
+		if buffer.Length == 0 {
+			continue
+		}
 		var subBuf []byte
 		if conn.useAppBuffers {
 			subBuf = findBuffer(uintptr(unsafe.Pointer(buffer.Buffer)),
 				int(buffer.Length),
 				&state.attachedRecvBuffers)
 			if subBuf == nil {
-				//abortStreamCallback(c, s)
+				println("PANIC receive buffer not found")
+				abortStreamCallback(c, s)
 				return 0
 			}
 		} else {
@@ -140,16 +144,7 @@ func newReadCallback(c, s C.HQUIC, recvBuffers *C.QUIC_BUFFER, bufferCount C.uin
 	case stream.readSignal <- struct{}{}:
 	default:
 	}
-	if conn.useAppBuffers {
-		//state.recvCount.Add(uint32(n))
-		//if state.needMoreBuffer() {
-		//	err := provideAndAttachAppBuffer(s, stream)
-		//	if err != nil {
-		//		//abortStreamCallback(c, s)
-		//		return 0
-		//	}
-		//}
-	} else {
+	if !conn.useAppBuffers {
 		n = 0
 	}
 	return n
@@ -175,6 +170,8 @@ func provideNewBuffersCallback(c, s C.HQUIC, need C.uint64_t) {
 	for negNeed > 0 {
 		n, err := provideAndAttachAppBuffer(s, stream)
 		if err != nil {
+			println("PANIC could not attach")
+			stream.abortClose()
 			return
 		}
 		negNeed -= n
@@ -446,10 +443,16 @@ func closePeerConnectionCallback(c C.HQUIC) {
 
 //export peerAddressChangedCallback
 func peerAddressChangedCallback(c C.HQUIC) {
-	res, has := connections.Load(c)
+	raw, has := connections.Load(c)
 	if !has {
 		println("PANIC no conn for peer change addr")
 		return // already closed
 	}
-	res.(MsQuicConn).state.dirtyRemote.Store(true)
+	conn := raw.(MsQuicConn)
+	ip, port := getRemoteAddr(c) // inline on the worker thread
+	conn.state.remoteAddrAccess.Lock()
+	conn.state.remoteAddr.IP = ip
+	conn.state.remoteAddr.Port = port
+	conn.state.remoteAddrAccess.Unlock()
+	conn.state.dirtyRemote.Store(true)
 }

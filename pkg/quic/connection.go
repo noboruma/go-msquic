@@ -20,8 +20,6 @@ type Connection interface {
 	Close() error
 	RemoteAddr() net.Addr
 	RemoteIP() string
-	DirtyRemoteAddr() bool
-	RefreshRemoteAddr()
 	Context() context.Context
 	SendDatagram(msg []byte) error
 	ReceiveDatagram(ctx context.Context) ([]byte, error)
@@ -189,6 +187,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 		for range initBufs {
 			initBuf := provideAppBuffer(res)
 			if initBuf == nil || cAttachAppBuffer(stream, initBuf) == -1 {
+				m.Unlock()
+				m = nil
 				mqc.state.streams.Delete(stream)
 				res.releaseBuffers()
 				cFreeStream(stream)
@@ -199,6 +199,8 @@ func (mqc MsQuicConn) OpenStream() (MsQuicStream, error) {
 	}
 
 	if cStartStream(stream, enable, useAppBuffers) == -1 {
+		m.Unlock()
+		m = nil
 		if _, has := mqc.state.streams.LoadAndDelete(stream); has {
 			res.releaseBuffers()
 			cFreeStream(stream)
@@ -255,18 +257,6 @@ func (mqc MsQuicConn) DirtyRemoteAddr() bool {
 	return mqc.state.dirtyRemote.Swap(false)
 }
 
-func (mqc MsQuicConn) RefreshRemoteAddr() {
-	mqc.state.remoteAddrAccess.Lock()
-	defer mqc.state.remoteAddrAccess.Unlock()
-	mqc.state.closingAccess.Lock()
-	defer mqc.state.closingAccess.Unlock()
-	if !mqc.state.shutdown.Load() {
-		ip, port := getRemoteAddr(mqc.conn)
-		mqc.state.remoteAddr.IP = ip
-		mqc.state.remoteAddr.Port = port
-	}
-}
-
 func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	select {
 	case <-ctx.Done():
@@ -281,6 +271,9 @@ func (c MsQuicConn) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 func (c MsQuicConn) SendDatagram(msg []byte) error {
 	c.state.closingAccess.Lock()
 	defer c.state.closingAccess.Unlock()
+	if c.state.shutdown.Load() {
+		return fmt.Errorf("connection closed")
+	}
 	if cDatagramSendConnection(c.conn, msg) != 0 {
 		return fmt.Errorf("error encountered while sending datagram")
 	}

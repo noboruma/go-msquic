@@ -59,6 +59,9 @@ func (cbs *chainedBuffers) Write(batch []byte) {
 }
 
 func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
+	if length <= 0 {
+		return nil
+	}
 	var buffer *[]byte
 	var offsetStart int
 	buffers.access.RLock()
@@ -67,10 +70,10 @@ func findBuffer(current uintptr, length int, buffers *attachedBuffers) []byte {
 	for _, buf := range buffers.buffers {
 		start := buf.start
 		end := buf.end
-		if current >= start && current < end && currentEnd > start && currentEnd <= end {
+		if current >= start && currentEnd <= end {
 			if rBuffer, has := recvBuffers.Load(end); has {
 				buffer = rBuffer.(escapingBuffer).goBuffer
-				offsetStart = int(uintptr(current) - uintptr(start))
+				offsetStart = int(current - start)
 			}
 			break
 		}
@@ -179,8 +182,6 @@ type streamState struct {
 	startSignal   chan struct{}
 	shutdown      atomic.Bool
 	readShutdown  atomic.Bool
-	recvCount     atomic.Uint32
-	recvTotal     atomic.Uint32
 
 	readDeadlineContext context.Context
 	readDeadlineCancel  context.CancelFunc
@@ -199,11 +200,6 @@ type attachedBuffers struct {
 type sliceAddresses struct {
 	start uintptr
 	end   uintptr
-}
-
-func (ss *streamState) needMoreBuffer() bool {
-	bufferSize := uint32(receiveBufferSize)
-	return ss.recvCount.Load()+bufferSize+(bufferSize/4) >= ss.recvTotal.Load() // always keep 1 extra bufferSize
 }
 
 func (ss *streamState) hasReadData() bool {
@@ -542,6 +538,9 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 			nn, err2 = mqs.cWrite(buffer[:bn], C.uint8_t(0))
 			n += int64(nn)
 			if err == nil {
+				if err2 == io.EOF {
+					err2 = io.ErrClosedPipe
+				}
 				err = err2
 			}
 		}
