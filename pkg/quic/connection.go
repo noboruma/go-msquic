@@ -83,7 +83,7 @@ func newMsQuicConn(c C.HQUIC, failOnOpen, noAlloc, useAppBuffers bool) MsQuicCon
 		startSignal:       make(chan struct{}, 1),
 		noAlloc:           noAlloc,
 		useAppBuffers:     useAppBuffers,
-		datagrams:         make(chan []byte),
+		datagrams:         make(chan []byte, 8),
 		state: &ConnState{
 			remoteAddr: net.UDPAddr{IP: ip, Port: port},
 		},
