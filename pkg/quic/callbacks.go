@@ -181,7 +181,6 @@ func provideNewBuffersCallback(c, s C.HQUIC, need C.uint64_t) {
 	}
 }
 
-
 //export newStreamCallback
 func newStreamCallback(c, s C.HQUIC) {
 	now := time.Now()
@@ -203,13 +202,13 @@ func newStreamCallback(c, s C.HQUIC) {
 
 	res := newMsQuicStream(c, s, conn.ctx, conn.noAlloc, conn.useAppBuffers)
 
+	conn.state.streams.Store(s, res)
+
 	if conn.useAppBuffers {
 		for range initBufs {
-			_, err := provideAndAttachAppBuffer(s, res)
-			if err != nil {
+			if _, err := provideAndAttachAppBuffer(s, res); err != nil {
 				println("PANIC could not attach")
-				res.releaseBuffers()
-				cAbortStream(s)
+				res.abortClose()
 				return
 			}
 		}
@@ -217,11 +216,9 @@ func newStreamCallback(c, s C.HQUIC) {
 
 	select {
 	case conn.acceptStreamQueue <- res:
-		rawConn.(MsQuicConn).state.streams.Store(s, res)
 	default:
 		println("WARNING rejecting stream")
-		res.releaseBuffers()
-		cAbortStream(s)
+		res.abortClose()
 	}
 }
 

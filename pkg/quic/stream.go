@@ -95,6 +95,9 @@ func (cbs *chainedBuffers) Clear() {
 	cur := cbs.current
 	for cur != nil {
 		cur.noCopyReadBuffer = nil
+		cur.noCopyReadIndex = 0
+		cur.copyReadBuffer.Reset()
+		cur.empty.Store(true)
 		cur = cur.next.Swap(nil)
 	}
 }
@@ -497,18 +500,26 @@ func (mqs MsQuicStream) WriteTo(w io.Writer) (int64, error) {
 	buffer := *buf
 	defer recvBufferPool.Put(buf)
 	n := int64(0)
-	for mqs.ctx.Err() == nil {
+	for {
 		bn, err := mqs.Read(buffer[:])
 		if bn != 0 {
-			var nn int
-			nn, err = w.Write(buffer[:bn])
+			var (
+				nn   int
+				err2 error
+			)
+			nn, err2 = w.Write(buffer[:bn])
 			n += int64(nn)
+			if err2 != nil {
+				err = err2
+			}
 		}
 		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
 			return n, err
 		}
 	}
-	return n, io.EOF
 }
 
 func (mqs MsQuicStream) ReadFrom(r io.Reader) (n int64, err error) {
@@ -536,10 +547,13 @@ func (mqs MsQuicStream) staticReadFrom(r io.Reader) (n int64, err error) {
 			}
 		}
 		if err != nil {
+			if err == io.EOF {
+				err = nil
+			}
 			return n, err
 		}
 	}
-	return n, io.EOF
+	return n, nil
 }
 
 func getSendBuffer() []byte {
@@ -573,30 +587,28 @@ var bytesRead atomic.Uint64
 
 func (mqs MsQuicStream) dynaReadFrom(r io.Reader) (n int64, err error) {
 	buffer := getSendBuffer()
+	defer func() {
+		releaseSendBuffer(uintptr(unsafe.Pointer(unsafe.SliceData(buffer))))
+	}()
+
 	for mqs.ctx.Err() == nil {
-		bn, err := r.Read(buffer[:])
-		if bn != 0 {
-			var (
-				nn   int
-				err2 error
-			)
-			nn, err = mqs.cWrite(buffer[:bn], C.uint8_t(1))
+		bn, rerr := r.Read(buffer)
+		if bn > 0 {
+			nn, werr := mqs.cWrite(buffer[:bn], C.uint8_t(1))
 			n += int64(nn)
-			if err == nil {
-				err = err2
+			if werr != nil {
+				return n, werr // C did not take the buffer
 			}
+			buffer = getSendBuffer() // C owns the old one now
 		}
-		if err != nil {
-			idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
-			releaseSendBuffer(idx)
-			return n, err
-		} else if bn > 0 {
-			buffer = getSendBuffer()
+		if rerr != nil {
+			if rerr == io.EOF {
+				rerr = nil
+			}
+			return n, rerr
 		}
 	}
-	idx := uintptr(unsafe.Pointer(unsafe.SliceData(buffer)))
-	releaseSendBuffer(idx)
-	return n, io.EOF
+	return n, io.ErrClosedPipe
 }
 
 var sendBuffers sync.Map //map[uintptr]escapingBuffer
