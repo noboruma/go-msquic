@@ -434,6 +434,10 @@ CreateListener(_In_ HQUIC configuration) {
     return listener;
 }
 
+void CloseListenConfiguration(_In_ HQUIC configuration) {
+    MsQuic->ConfigurationClose(configuration);
+}
+
 int StartListener(_In_ HQUIC listener,
                   _In_ const char* addr,
                   _In_ uint16_t port,

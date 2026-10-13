@@ -110,6 +110,11 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	cKeyFile := C.CString(cfg.KeyFile)
 	cCertFile := C.CString(cfg.CertFile)
 	cAlpn := C.CString(cfg.Alpn)
+	freeStrings := func() {
+		C.free(unsafe.Pointer(cKeyFile))
+		C.free(unsafe.Pointer(cCertFile))
+		C.free(unsafe.Pointer(cAlpn))
+	}
 
 	buffer := C.struct_QUIC_BUFFER{
 		Length: C.uint32_t(len(cfg.Alpn)),
@@ -151,13 +156,14 @@ func ListenAddr(addr string, cfg Config) (MsQuicListener, error) {
 	})
 
 	if config == nil {
-
+		freeStrings()
 		return MsQuicListener{}, fmt.Errorf("failed to create config")
-
 	}
 
 	listener := C.CreateListener(config)
 	if listener == nil {
+		C.CloseListenConfiguration(config)
+		freeStrings()
 		return MsQuicListener{}, fmt.Errorf("error creating listener")
 	}
 	res := newMsQuicListener(listener, config, cKeyFile, cCertFile, cAlpn, !cfg.DisableFailOnOpenStream, cfg.DisableSendBuffering, cfg.EnableAppBuffering)
