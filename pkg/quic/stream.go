@@ -230,6 +230,7 @@ type MsQuicStream struct {
 
 func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers bool) MsQuicStream {
 	ctx, cancel := context.WithCancel(connCtx)
+	readCtx, readCancel := context.WithCancel(ctx)
 	res := MsQuicStream{
 		conn:   c,
 		stream: s,
@@ -239,7 +240,8 @@ func newMsQuicStream(c, s C.HQUIC, connCtx context.Context, noAlloc, appBuffers 
 			readBuffers: chainedBuffers{
 				copy: !appBuffers,
 			},
-			readDeadlineContext: ctx,
+			readDeadlineContext: readCtx,
+			readDeadlineCancel:  readCancel,
 			writeDeadline:       time.Time{},
 			shutdown:            atomic.Bool{},
 			startSignal:         make(chan struct{}, 1),
@@ -410,14 +412,11 @@ func (mqs MsQuicStream) SetDeadline(ttl time.Time) error {
 func (mqs MsQuicStream) SetReadDeadline(ttl time.Time) error {
 	mqs.state.deadlineAccess.Lock()
 	defer mqs.state.deadlineAccess.Unlock()
-	if mqs.state.readDeadlineCancel != nil {
-		mqs.state.readDeadlineCancel()
-		mqs.state.readDeadlineCancel = nil
-	}
-	if !ttl.IsZero() {
-		mqs.state.readDeadlineContext, mqs.state.readDeadlineCancel = context.WithDeadline(mqs.ctx, ttl)
+	mqs.state.readDeadlineCancel()
+	if ttl.IsZero() {
+		mqs.state.readDeadlineContext, mqs.state.readDeadlineCancel = context.WithCancel(mqs.ctx)
 	} else {
-		mqs.state.readDeadlineContext = mqs.ctx
+		mqs.state.readDeadlineContext, mqs.state.readDeadlineCancel = context.WithDeadline(mqs.ctx, ttl)
 	}
 	return nil
 }
